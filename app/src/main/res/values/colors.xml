@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Paleta Principal - Dark/Futuristic -->
+    <color name="simbionte_bg">#0A0E14</color>
+    <color name="simbionte_surface">#161B22</color>
+    <color name="simbionte_primary">#00E676</color> <!-- Verde Neon -->
+    <color name="simbionte_secondary">#7C4DFF</color> <!-- Roxo Digital -->
+
+    <!-- Chat Bubbles -->
+    <color name="chat_bubble_sent">#004D40</color>
+    <color name="chat_bubble_received">#21262D</color>
+    <color name="chat_text_primary">#E6EDF3</color>
+    <color name="chat_text_secondary">#8B949E</color>
+
+    <!-- Estados Cognitivos -->
+    <color name="cog_momentum_alto">#00E676</color> <!-- Verde neon -->
+    <color name="cog_momentum_medio">#FFC107</color> <!-- Amarelo -->
+    <color name="cog_momentum_baixo">#8B949E</color> <!-- Cinza -->
+    <color name="cog_drift">#FF5252</color> <!-- Vermelho para deriva -->
+</resources>

@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingVertical="4dp"
+    android:paddingHorizontal="12dp">
+
+    <TextView
+        android:id="@+id/textMensagem"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:maxWidth="280dp"
+        android:background="@drawable/bg_mensagem_recebida"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp"
+        android:paddingStart="16dp"
+        android:paddingEnd="12dp"
+        android:textColor="@color/chat_text_primary"
+        android:textSize="16sp"
+        android:text="Mensagem recebida"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <TextView
+        android:id="@+id/textTime"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="12:46"
+        android:textColor="@color/chat_text_secondary"
+        android:textSize="10sp"
+        android:layout_marginStart="6dp"
+        android:layout_marginBottom="4dp"
+        app:layout_constraintBottom_toBottomOf="@id/textMensagem"
+        app:layout_constraintStart_toStartOf="@id/textMensagem" />
+
+    <TextView
+        android:id="@+id/textTags"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="9sp"
+        android:textColor="@color/simbionte_secondary"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:layout_marginTop="2dp"
+        android:layout_marginStart="16dp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/textMensagem" />
+
+    <TextView
+        android:id="@+id/textScore"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="9sp"
+        android:textColor="@color/simbionte_primary"
+        android:layout_marginTop="2dp"
+        android:layout_marginStart="6dp"
+        app:layout_constraintStart_toEndOf="@id/textTags"
+        app:layout_constraintTop_toBottomOf="@id/textMensagem" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

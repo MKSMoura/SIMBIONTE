@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Base.Theme.SIMBIONTE" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/simbionte_primary</item>
+        <item name="colorSecondary">@color/simbionte_secondary</item>
+        <item name="android:windowBackground">@color/simbionte_bg</item>
+        <item name="android:statusBarColor">@color/simbionte_bg</item>
+    </style>
+
+    <style name="Theme.SIMBIONTE" parent="Base.Theme.SIMBIONTE" />
+
+    <style name="ShapeAppearance.Simbionte.Circle" parent="">
+        <item name="cornerSize">50%</item>
+    </style>
+</resources>

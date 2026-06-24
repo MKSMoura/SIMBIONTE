@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">SIMBIONTE</string>
+    <string name="hint_message">Mensagem</string>
+    <string name="status_seen">visto recentemente</string>
+    <string name="status_typing">digitando...</string>
+    <string name="desc_send">Enviar mensagem</string>
+    <string name="desc_avatar">Avatar do contato</string>
+</resources>
