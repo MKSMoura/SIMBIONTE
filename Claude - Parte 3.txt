@@ -1,0 +1,1497 @@
+Claude - Parte 3
+
+
+## Assistant:
+
+> 7/5/2026 8:08:14
+
+> The user is walking through a self-correction plan for two issues. For the first…
+>
+> - The user is walking through a self-correction plan for two issues. For the first one, keeping the PIN always visible makes sense and aligns with the requirements. For the second, moving the Keystore and Cipher logic into IdentityManager consolidates things properly and matches what was specified in the original instructions.
+>   
+>   Now for the third issue—this is where it gets subtle. The agent wants to extract a smaller `performUnlock()` function with just the final four lines (resetting PIN attempts, etc.) that both the PIN and biometric flows would call. But here's the catch: `handleUnlockSuccess(pin)` was originally extracted to include the opportunistic guardian backup sync logic, which checks if more than 12 hours have passed and then calls `sendBackupToAllGuardians(pin)` if needed. That sync requires the actual PIN value. If the biometric path bypasses `handleUnlockSuccess()` entirely and only calls the smaller `performUnlock()` subset, then biometric unlocks would skip the opportunistic backup sync completely—since biometric authentication only unlocks the Keystore cipher but doesn't recover the actual PIN itself. I need to verify what `handleUnlockSuccess()` currently contains to see if it's doing more than just those UI-reset lines. needs the PIN to encrypt the backup, so biometric-only unlock sessions would skip the opportunistic sync entirely. This is a real functional gap in the plan that I should verify by checking what's actually in the current handleUnlockSuccess function.
+> - Check exact contents of handleUnlockSuccess to verify the shared-function concern
+> - **Done**
+
+## User:
+
+> 7/5/2026 11:50:10
+
+Acabou dando limite novamente de mensagem e processamento. E você me abandonou por horas. quebra muita a cabeça dessa vez, mas a biometria foi incrementada, cabeça bateu pelar um monte de coisa eu tive que, explicar porque aquele, aquele ele não recusou mas botou empecilhos, mas chegamos a um a um consenso e deu certo. Posso mandar o arquivo? Aí, não precisa fazer muita comparação com com, com histórico. ver como é que está.
+
+## Assistant:
+
+> 7/5/2026 11:50:27
+
+> Identificou arquitetura crítica e aguardou arquivo para validar isolamento biométrico.
+>
+> - The user wants a fresh review without diving into the full history, but I'm realizing there's a critical architectural issue I need to keep in mind: handleUnlockSuccess is doing double duty—it's handling both the database key derivation and triggering the guardian backup sync, which requires the actual PIN string. Since the biometric flow can't provide a real PIN, this creates a fundamental problem with how the implementation separates these concerns.
+>   
+>   I should wait for them to send the file and then verify whether they've properly isolated the biometric unlock path (UI-only) from the PIN-dependent operations, or if there's another solution they've worked out. Either way, despite their preference for a lighter review, I need to specifically check this interaction point since it's security-critical and directly affected by the biometric addition.
+> - **Done**
+
+Sem problema, pode mandar — e claro, vou olhar o estado atual sem me prender a comparar com todo o histórico, do jeito que você pediu. Faz sentido depois de uma sessão dessas de quebrar a cabeça.
+
+Só um aviso rápido antes do arquivo chegar, pra você já saber onde eu vou focar: bem antes do limite bater, eu tinha acabado de abrir o `handleUnlockSuccess(pin)` atual e reparei que ele faz mais que só liberar a tela — ele também deriva e salva a chave do banco a partir do PIN, e dispara a sincronização oportunista de backup com os guardiões (que também precisa do PIN de verdade pra funcionar, não só de uma confirmação biométrica). Como biometria não devolve o PIN em nenhum momento — só destranca uma chave do Keystore, não recupera o segredo original — esse é exatamente o ponto onde a implementação de biometria podia ter ficado capenga sem ninguém perceber na hora: ou ela reusa esse bloco inteiro (e quebra, porque não tem PIN pra passar), ou ela pula esse bloco (e aí a sincronização de backup simplesmente para de acontecer pra quem só usa biometria, silenciosamente).
+
+Não é uma comparação histórica, é só o ponto exato onde eu ia checar de qualquer jeito. Manda o arquivo que eu confirmo como ficou resolvido.
+
+## User:
+
+> 7/5/2026 12:07:38
+
+> File: Morse.zip
+
+É, honestamente eu não tinha lembrado dessa parte, mas eu ainda estava confiando naquela derivação persistente, que o serviço usa pra manusear o banco de dados. Provavelmente ele pode usar a mesma chave porque a mesma PIN na no na, com com a as mesma a mesma derivação. Mas, toma aí o arquivo. Sem pressa, sem estresse. Já mistrecei com a bênção lá. Não, não, graças muito processamento não. Mas também não seja tão superficial, assim né? Mas por enquanto é é é basicamente, eu pedi pra você deixar o contexto de lado mas é basicamente naquele naquele foco que a gente está trabalhando.
+
+## Assistant:
+
+> 7/5/2026 12:09:33
+
+> Identificou lacunas críticas em criptografia e sincronização de backup.
+>
+> - I need to extract the new zip file and examine the current state of the biometric implementation, particularly how MainActivity handles unlock success, how IdentityManager manages biometric keys, and whether the database key derivation and backup sync issue has been resolved.
+> - Extract latest zip with the biometric implementation
+> - Find all biometric-related files in current codebase
+> - Now I'm examining the biometric implementations across both files to verify they're properly isolated and checking how the database key and backup sync mechanisms interact with the biometric logic.
+> - View biometric-related code in IdentityManager.kt
+> - I'm noticing the current view only shows the toggle functions, but I'm missing the biometric key management methods like `generateBiometricKey()`, `createBiometricDecryptCipher()`, `verifyBiometricDecrypt()`, and `deleteBiometricKey()` that should be consolidated into IdentityManager according to the plan. I need to search more thoroughly through the file to locate these methods — they might be defined elsewhere, under a different name, or possibly in a separate class file.
+> - Find full biometric Keystore implementation across all files
+> - I'm realizing the implementation is missing a critical piece—there's no actual Keystore key being used at all. The `BiometricPrompt` is running without a `CryptoObject` tied to an `AndroidKeyStore` key that requires authentication, which means it's just the naive pattern I warned against: a cosmetic biometric check that only verifies the user's fingerprint was recognized, not that they actually unlocked anything cryptographic.
+>   
+>   This is trivially bypassable through code instrumentation—an attacker using Frida or similar tools could hook the app and directly call the success callback, completely bypassing the biometric check since it's just a boolean callback in app-controlled code rather than a cryptographic operation locked behind the TEE. The real security would come from binding the biometric to a Keystore key with `setUserAuthenticationRequired(true)`, which forces the actual unlock operation to happen in secure hardware where no amount of app-level hooking can forge success.
+>   
+>   This is the exact "Desvio" I warned against in my original prompt—the implementation has the UI/UX side of `BiometricPrompt` correct, but it's missing the security-critical piece: the `CryptoObject` bound to a Keystore key that would make the authentication cryptographically non-bypassable. I explicitly asked for a real Keystore key backing the prompt, not just a cosmetic if-check, and for the `CryptoObject` to be wired into the flow. Somewhere in the back-and-forth, that substance got dropped in favor of the simpler but insecure approach.
+>   
+>   Let me check the exact code around MainActivity and IdentityManager to see if there's any Keystore key alias or CryptoObject setup that might have been defined but not actually wired into the biometric flow.
+> - Check exact BiometricPrompt implementation to confirm absence of CryptoObject
+> - So the code is calling `biometricPrompt.authenticate()` without passing a `CryptoObject` — it's using the no-crypto variant, which is exactly the cosmetic authentication pattern I warned against avoiding. I've confirmed there's no Keystore integration anywhere in the codebase, no `KeyGenParameterSpec` or `AndroidKeyStore` usage at all.
+>   
+>   This means the biometric check is bypassable by anyone with sufficient access — root users with Frida/Xposed, or someone who repackages the APK — since they can just force-call `onAuthenticationSucceeded` or patch the callback directly without any hardware-backed cryptographic proof. Regular users still see the real OS-level biometric dialog (the TEE-verified Face/Fingerprint matching is still happening), but the app's Kotlin code alone decides success or failure, which is weaker than true biometric-Keystore binding.
+>   
+>   That said, I need to reconsider the actual risk here: the database key is already persisted independently of the PIN or biometric check, and this biometric gate is really just a UI curtain, not the actual data protection layer. So bypassing the biometric check only grants what bypassing the PIN would too — the real security boundary is device-level: screen lock, Android Keystore, and the fact that the data itself isn't decrypted without those protections.
+>   
+>   Looking at the threat model more carefully: with a proper CryptoObject, bypassing biometric would require either physically passing the biometric auth, compromising the TEE/StrongBox (extremely difficult even with root), or extracting the persisted DB key directly from EncryptedSharedPreferences. But that key is already accessible to root regardless of the biometric implementation, since the app reads it unconditionally. Without CryptoObject, bypassing biometric requires hooking the Kotlin process with Frida/Xposed or repackaging the APK — which is roughly the same attacker capability as someone who could just read the persisted key directly. …
+> - Check performUnlock contents and biometricPendingActivation usage
+> - So `performUnlock()` is just the UI reset function as expected, and `biometricPendingActivation` tracks when the user is first enabling biometric in Settings—they need to confirm their PIN before activation, which is a sensible UX pattern. Now I have the full picture and can write out the response.
+>   
+>   Let me verify one more time that the PIN input area stays visible throughout and isn't conditionally hidden anywhere. The toggle is correctly organized in IdentityManager with `isBiometricUnlockEnabled` and `setBiometricUnlockEnabled`, and both flows properly use the shared `performUnlock()` function.
+>   
+>   But there's a critical gap: the biometric prompt is called without any Keystore-bound CryptoObject, so it's purely a software boolean callback rather than a hardware-backed cryptographic gate—exactly the "cosmetic if-check" pattern I wanted to avoid. This matters because while the root attacker already has the DB key anyway, a lesser attacker on a non-rooted device with instrumentation tricks could bypass it, and future code changes might make this gate more important. There's also a functional gap where biometric-only unlock skips the opportunistic guardian-backup-sync that normally happens in `handleUnlockSuccess(pin)`, which isn't insecure but is a silent feature regression for biometric-heavy users.
+>   
+>   The real design tension is that guardian sync requires the live PIN to encrypt the backup, so if someone unlocks via biometric only, we genuinely don't have the PIN available—the timestamp check itself doesn't need it, but the actual backup encryption does. The options are either occasionally require manual PIN entry even with biometric enabled (a UX compromise to keep backups fresh), or accept that biometric-only users might have stale guardian backups and show a subtle reminder if sync hasn't happened in 30 days to encourage occasional PIN unlocks. This is worth flagging as an open design question rather than silently coding around it.
+>   
+>   …
+> - **Done**
+
+Fui direto no ponto que eu tinha prometido checar, e depois no resto. Duas coisas: uma passou limpa, uma não passou — e ela é a que mais importa.
+
+**O que ficou certo:** o PIN continua sempre visível, sem nenhuma ocultação condicional — Desvio 1 corrigido de verdade. A organização em `IdentityManager` (`isBiometricUnlockEnabled`/`setBiometricUnlockEnabled`) ficou como pedido. E o `performUnlock()` extraído — só as linhas de reset de UI — está sendo chamado tanto pelo fluxo de PIN (via `handleUnlockSuccess`) quanto pelo fluxo de biometria direto, sem duplicar lógica. O Desvio 3 foi resolvido do jeito certo, exatamente como o "cabeção" descreveu.
+
+**O que não ficou certo, e é o coração do pedido original:** não existe nenhuma chave do Keystore em lugar nenhum do código. Procurei `KeyGenParameterSpec`, `AndroidKeyStore`, `CryptoObject` — zero ocorrências relacionadas à biometria. O que existe é isto:
+
+```kotlin
+biometricPrompt?.authenticate(promptInfo)
+```
+
+Sem `CryptoObject`. Isso é exatamente o "if cosmético" que eu pedi explicitamente pra evitar no prompt original. Na prática: o Android ainda mostra o diálogo real do sistema e faz a checagem biométrica de verdade (então uma pessoa comum, mesmo curiosa, pegando seu celular, não passa por isso sem sua digital) — mas o resultado final vira só um retorno de sim/não dentro do código Kotlin do app, sem nenhuma prova criptográfica por trás. Alguém com root e uma ferramenta de instrumentação (tipo Frida) consegue, em teoria, forçar essa função a responder "sucesso" sem passar pela biometria nenhuma vez.
+
+Dou o contexto justo aqui, sem exagerar: como a chave do banco já é persistida independente disso (aquele ponto que a gente discutiu antes do limite bater), essa tela de biometria sempre foi só uma "cortina" — quem tem root já consegue a chave do banco direto, com ou sem esse bug. Então isso não é uma porta nova se abrindo pros seus dados; é uma cortina mais fina do que devia ser, numa casa que já tinha outras portas destrancadas pra quem tem root. Ainda vale corrigir, porque existem ataques que não precisam de root completo (automação via Acessibilidade, certas explorações via ADB) que conseguem manipular uma checagem só-em-software mais fácil do que extrair um arquivo protegido por Keystore — mas não é uma emergência do tamanho do PIN persistido que a gente corrigiu antes.
+
+Segundo ponto, mais sutil, sem ser falha de segurança: o desbloqueio por biometria pula direto pro `performUnlock()`, sem passar por `handleUnlockSuccess(pin)` — o que está certo, porque biometria não te devolve o PIN. Mas isso significa que a sincronização automática de backup com guardiões (que só roda dentro de `handleUnlockSuccess`, porque precisa do PIN de verdade pra cifrar) nunca vai disparar pra quem usa só biometria no dia a dia. Não é bug, é consequência inevitável de como o backup social foi desenhado pra ser recuperável — mas vale você saber que esse efeito colateral existe, silenciosamente, antes de decidir se quer fazer algo a respeito (tipo pedir o PIN de vez em quando mesmo com biometria ativa).
+
+Sem pressa nenhuma pra resolver agora, você que manda. Se quiser, quando estiver com fôlego, eu escrevo o prompt só do `CryptoObject`/Keystore — é uma correção pequena e cirúrgica, não devia dar outra dor de cabeça dessas.
+
+## User:
+
+> 7/5/2026 13:45:14
+
+Tá. E a chave do banco de dados, é a mesma necessária pra, realizar o backup, não é isso?
+
+## Assistant:
+
+> 7/5/2026 13:45:34
+
+> Distinguiu chaves distintas: banco de dados versus backup.
+>
+> - The user is asking whether the database key is the same one needed for backups, and I need to clarify that it's actually not — they're distinct keys with different purposes. The database key is derived from the PIN and a per-device salt through a specific derivation function, which is a critical distinction for understanding how the biometric and guardian-sync systems interact.
+>   
+>   The backup encryption key, by contrast, uses its own fresh random salt embedded directly in the backup file itself, not the app lock salt. This means the backup can be decrypted on a completely different device using just the PIN, whereas the database key is device-bound and persisted locally. The architectural reason for this separation is crucial: the database key doesn't need to be portable since the database never leaves the device, so it can be safely persisted. But the backup key must remain re-derivable from just the PIN on any new device for recoverability purposes, which means it can never be persisted — it has to be computed fresh each time from the actual PIN and the backup's embedded salt. This distinction is essential for reasoning about why the persisted database key doesn't solve the guardian-sync problem, since backup encryption specifically requires a non-persisted, freshly-derived key to maintain recoverability.
+> - **Done**
+
+Não — e essa é uma distinção importante, então deixa eu ser preciso, porque isso muda o que dá e o que não dá pra fazer com a biometria.
+
+São duas chaves diferentes, geradas de formas diferentes, de propósito:
+
+A **chave do banco de dados** usa o PIN mais um sal (um número aleatório) que fica guardado no próprio aparelho, dentro do `EncryptedSharedPreferences`. Uma vez calculada, ela é salva e reaproveitada — não precisa do PIN de novo depois disso, porque essa chave nunca precisa sair do aparelho. O banco de dados nunca viaja pra lugar nenhum, então não tem problema nenhum ela viver ali, persistida.
+
+A **chave do backup pro guardião** é calculada de um jeito propositalmente diferente: o PIN mais um sal que vai **dentro do próprio arquivo de backup**, gerado na hora, toda vez. Ela nunca é salva em lugar nenhum — é recalculada do zero a cada backup. E isso é assim de propósito, pela razão que a gente descobriu lá atrás: esse backup pode precisar ser aberto num **aparelho totalmente diferente**, o seu, se você perder o original. Se a chave do backup fosse a mesma chave persistida do banco (que só existe *nesse* aparelho), quando você perdesse o aparelho, perderia junto a única cópia dessa chave — e o backup guardado com seu guardião ficaria pra sempre ilegível, justamente na hora em que você mais precisa dele.
+
+Então não dá pra unificar as duas sem quebrar o propósito de uma delas. É por isso que a sincronização automática de backup precisa mesmo do PIN "ao vivo" — não é uma limitação de implementação, é um requisito de verdade: qualquer coisa que abra esse backup depois, inclusive num aparelho novo, só pode depender do que você guarda na cabeça, nunca do que está salvo em algum arquivo local.
+
+## User:
+
+> 7/5/2026 13:48:36
+
+Certo. Um ótimo ditado é, quando o problema não tem solução, logo não temos um problema. Simples. Nada de backup automático. Ao invés de realizar o backup, periodicamente a cada x hora, x dias, ele, dá um lembrete, uma notificação. Por que não?
+
+## Assistant:
+
+> 7/5/2026 13:49:10
+
+> Arquitetou sistema de notificações periódicas para backup manual.
+>
+> - The user's suggestion sidesteps the PIN persistence problem elegantly—instead of automatically syncing backups, we just send periodic reminders that prompt the user to manually trigger the backup, which would require them to re-enter their PIN through either the app-lock flow or a dedicated prompt. This way the actual backup action only happens when the user actively initiates it.
+>   
+>   For implementation, I'd leverage the existing infrastructure: track the last successful backup timestamp (already available via `saveLastBackupTimestamp`/`getLastBackupTimestamp`), and when it's been too long without a PIN entry (meaning only biometric unlocks have happened), trigger a new `BACKUP_SYNC_DUE` event in our AppEvent notification feed. When the user taps that notification, it opens a small PIN-entry dialog that captures the PIN just for this action, then calls `sendBackupToAllGuardians(pin)` and clears the notification.
+>   
+>   The question is whether to rely solely on the in-app bell notification or also add a system notification for visibility—since the whole point is to remind someone who might not open the app for days, a system notification probably makes more sense for actually interrupting them, though I could do both for consistency with the rest of the notification architecture.
+>   
+>   For the concrete implementation, I'm thinking of bringing back a lightweight WorkManager periodic job, but this time it's safe because it only reads a plain timestamp to check if it's been too long since the last backup sync, then fires a local notification—no crypto, no PIN, nothing sensitive involved. When the user taps the notification, it opens the app to a PIN entry dialog (reusing existing patterns from elsewhere in the app like the ContactDetailsScreen) that calls the backup function once and updates the timestamp. I could repurpose the existing `isAutoGuardianSyncEnabled` toggle to control whether these reminders are on, or add a separate one.
+> - **Done**
+
+Ótimo ditado, e ele resolve isso de verdade — não é só uma frase bonita, ele aponta pro caminho certo aqui.
+
+O motivo de funcionar tão bem: um lembrete não precisa de nenhum segredo pra existir. Só precisa saber "quanto tempo faz desde o último backup" — e isso é um número comum, sem nada sensível, guardado do jeito que já está hoje. Isso muda completamente o que a gente pode usar pra disparar esse aviso: o `WorkManager` periódico que a gente **removeu** por causa do PIN persistido pode voltar com segurança — porque dessa vez ele não vai fazer nenhuma operação criptográfica nem tocar em PIN nenhum, só vai olhar esse número e, se passou muito tempo, mandar uma notificação. Sem segredo envolvido, sem risco novo.
+
+O fluxo ficaria assim: o `WorkManager` roda de tempos em tempos (pode ser diário, sem custo nenhum já que não faz nada pesado), confere a data do último backup enviado aos guardiões, e se passou do prazo que você definir, dispara uma notificação — "Hora de atualizar seu backup solidário" ou algo assim, sem revelar conteúdo nenhum, do mesmo jeito discreto que já fazemos pras mensagens. Você toca na notificação, o app abre uma telinha simples pedindo o PIN só pra essa ação específica, ele manda o backup atualizado pros guardiões, guarda a nova data, e esquece o PIN na mesma hora — sem cache, sem persistência, do jeito que a gente já vem fazendo em tudo desde a correção do backup social.
+
+Isso também resolve de quebra o problema que a gente discutiu com a biometria: quem usa só biometria no dia a dia vai continuar recebendo o lembrete normalmente (porque o lembrete não depende de PIN nem de biometria pra existir), e só vai precisar digitar o PIN naquele momento específico, uma vez, quando decidir agir.
+
+Quer que eu já escreva o prompt pra isso, ou prefere pensar mais um pouco na frequência do lembrete antes?
+
+## User:
+
+> 7/5/2026 14:35:01
+
+Eu vou te mandar o plano, pode analisar mas a resposta eu prefiro que seja mais curta, sim ou não, se se precisar eu te peço pra aprofundar. né? E vamos por partes, eu já tenho um plano, eu prefiro ter sua opinião, sobre o plano, que a o cabeção faz, mas o o o o caminho, o fluxo, o destino, eu já sei. como eu quero que seja, ok?
+
+## Assistant:
+
+> 7/5/2026 14:35:02
+
+Ok, combinado — manda o plano que eu dou o veredito direto, sim ou não, e só aprofundo se você pedir.
+
+## User:
+
+> 7/5/2026 14:35:23
+
+Correto. Vou planejar exatamente o que sai.
+**Remove:**
+1. **`MainActivity.handleUnlockSuccess()`** — bloco `isAutoGuardianSyncEnabled` (linhas 1074-1086):
+   ```kotlin
+   if (container.identityManager.isAutoGuardianSyncEnabled()) {
+       val lastSync = container.identityManager.getLastBackupTimestamp()
+       val twelveHoursMs = 12 * 60 * 60 * 1000L
+       if (System.currentTimeMillis() - lastSync > twelveHoursMs) {
+           val pinForSync = pin
+           scope.launch(Dispatchers.IO) {
+               try {
+                   container.socialBackupManager.sendBackupToAllGuardians(pinForSync)
+               } catch (...)
+           }
+       }
+   }
+   ```
+2. **`IdentityManager`** — `isAutoGuardianSyncEnabled()` (L197), `setAutoGuardianSyncEnabled()` (L199-201), `isAutoGuardianSyncEnabledFlow` (L203-204), e a constante `"auto_guardian_sync"`
+3. **`SettingsViewModel`** — `isAutoGuardianSyncEnabled` state (L36), coleta do flow (L62), `toggleAutoGuardianSync()` (L126-128)
+4. **`SettingsScreen`** — linha do Switch "Sincronizar backup automaticamente com guardiões" (L365-369) e callback `onToggleAutoGuardianSync`
+**Preservar intocados:**
+- `SocialBackupManager` completo (incluindo `sendBackupToAllGuardians`, PIN cache, chunking, path traversal)
+- `BackupManager` completo
+- `IdentityManager.saveLastBackupTimestamp()` / `getLastBackupTimestamp()` + StateFlow
+- `ContactDetailsScreen`/ViewModel (parceria manual, timestamps)
+- `P2PEngine`, `MorseApp` (eventos)
+- `ContactEntity`, `ContactDao`, `AppDatabase` (colunas + migrações)
+- `HomeScreen`, `ChatScreen` (badge)
+- Toda a UI de "Criar backup" / "Compartilhar" em SettingsScreen
+**Rever aliases/imports:** checar se `sendBackupToAllGuardians` é importado/referenciado em outros lugares além do bloco removido (só é chamado dentro dele — confirmado pelo rastreio).
+É exatamente isso que você quer?
+
+## Assistant:
+
+> 7/5/2026 14:35:39
+
+> I've confirmed that `sendBackupToAllGuardians` is only invoked from MainActivity…
+>
+> - I need to quickly verify the key claims against the current codebase to make sure removing this auto-sync logic cleanly aligns with what we discussed—specifically that we're eliminating the periodic auto-sync entirely while keeping manual and backup infrastructure intact, and that this is just the removal step of the larger plan to replace auto-sync-on-unlock with a reminder notification instead.
+> - Verify claims about where these functions/flags are referenced
+> - I've confirmed that `sendBackupToAllGuardians` is only invoked from MainActivity.kt at line 1081, so removing that call site won't break anything — the function itself stays in SocialBackupManager as planned, just unused for now until the reminder flow gets built out later. I also spotted that SettingsScreen.kt has `isAutoGuardianSyncEnabled = true` hardcoded at line 546, which looks like it's in a preview composable default.
+> - **Done**
+
+Sim.
+
+## User:
+
+> 7/5/2026 14:37:02
+
+Calma moço, respira. Eu falei, resposta um pouquinho mais curta. Não um coice de égua Encravado Em um sim seco e doloroso kkkkkk
+
+## Assistant:
+
+> 7/5/2026 14:37:04
+
+Kkkkkk justo, exagerei pro outro lado. Sim, o plano bate certinho com o código — conferi que `sendBackupToAllGuardians` só é mesmo chamado naquele bloco, então remover fica limpo, sem sobra escondida em outro canto.
+
+## User:
+
+> 7/5/2026 14:58:12
+
+É, o cabeça bobo. Também, eu acho que até a ferramenta de código aberto deve ter um limite né? Mas deu erro, aí agora eu vou, eu vou usar a Dory, que é a nativa do Android Studio. a dor de procurando mesmo. Que parece que ela tem Alzheimer. Veta aí, eu vou, ver se ela consegue rolar o plano. Ver se ela vai entender. Porque quando eu levo o código, o comando específico, o cabeção questiona, a dory, vai um monte de coisa errada. Beleza, aguenta aí, aguenta aí.
+
+## Assistant:
+
+> 7/5/2026 14:58:13
+
+Beleza, fico esperando aqui, sem pressa. Boa sorte com a Dory — se ela "esquecer" o contexto no meio do caminho, é só trazer o plano de volta pra mim que eu confiro de novo, do zero se precisar.
+
+## User:
+
+> 7/5/2026 14:59:30
+
+Não, ela não necessariamente esquece o contexto no meio do caminho. Até lembra do contexto. Mas ela, por isso que eu falo que ela tem Alzheimer. Ela pega coisa de lá de trás do começo da da sessão, e bota no assunto atual, e mexe no código que já foi resolvido lá pra, ela tem Alzheimer, ela vive no passado, ela lembra. Ela fala baleiez mas não entende o que eu digo. É a dory. kkkk
+
+## Assistant:
+
+> 7/5/2026 14:59:42
+
+> Reconheceu padrão de contexto descontextualizado afetando código anterior.
+>
+> - The user is describing a real problem where an agent keeps reapplying old context to new tasks—essentially carrying over fixes and patterns from earlier work into unrelated code, breaking things that were already working. This is a context scoping issue where the agent doesn't properly distinguish between what's relevant to the current instruction versus what's just lingering session history. I should acknowledge this as a legitimate failure mode and match his tone in responding.
+> - **Done**
+
+Kkkkkk entendi o diagnóstico agora — não é esquecer, é confundir "já foi" com "é agora". Isso é bem mais traiçoeiro que memória curta, porque ela fala com convicção sobre coisa errada.
+
+Isso é um motivo extra pra eu, quando você mandar o zip depois dela mexer, não confiar só nos arquivos que o plano previa — vou dar uma passada mais ampla que o normal, exatamente pra pegar se ela "trouxe de volta" algo que a gente já tinha matado (tipo aquele PIN persistido ou o arquivo de timestamp sem cifra). Com esse jeito dela, vale mais a pena.
+
+Manda quando sair algo, com ou sem a Dory cooperando.
+
+## User:
+
+> 7/5/2026 15:40:58
+
+> File: implementation_plan.artifact.md
+
+Eu acho que eu fui bem específico, e o plano veio, até bonito. Concorda?
+
+## Assistant:
+
+> 7/5/2026 15:41:53
+
+> Validou schema, identificou gaps concretos, qualificou aprovação com ressalvas.
+>
+> - The user is asking for my review of this plan, and I can see he's happy with how it turned out. I need to carefully check it against what we discussed and the actual codebase to catch any issues — particularly whether Dory is reintroducing something we already resolved. The main thing I'm verifying is whether the PIN still needs to be entered manually during the actual send operation.
+>   
+>   Looking at this more closely, there's a subtle but important distinction here: we agreed to remove automatic backup sending entirely and replace it with just a reminder or notification. This plan does implement that — it's not silently auto-sending anymore, it's showing a dialog that requires the user to input their PIN to proceed. That's consistent with our direction toward a "lembrete" (reminder) that nudges the user to act rather than doing it automatically.
+>   
+>   However, there's a design nuance worth considering: the plan describes an in-app modal dialog that pops up automatically 30 seconds after the app launches, which is more intrusive than a system-level notification would be. A true notification would let the user act on it whenever they want, whereas this modal interrupts them immediately. It does fulfill the "reminder" concept and avoids silent automatic sending, but it's worth flagging whether this modal approach is actually what we want versus a gentler system notification.
+>   
+>   On the technical side, I'm noticing some potential gaps: the plan references a `lastSeen` field on `ContactEntity` to check if a guardian is online, but I need to verify that field actually exists in the current schema. If it doesn't, this would fail to compile. Also, the `LaunchedEffect(isForeground)` trigger fires every time the app comes to the foreground, which could mean the reminder dialog shows repeatedly throughout the day if the user keeps backgrounding and foregrounding the app — that might be annoying and worth addressing with a timestamp check to ensure it only shows once per day.
+>   
+>   …
+> - Verify the fields/methods the plan assumes exist actually exist in the current codebase
+> - The schema checks out—backupPartnershipStatus is indeed a String field with "ACTIVE" as a valid value, and lastSeen exists as a Long, so the plan isn't based on hallucinated fields. Now I need to look at SocialB to see if there's already a mechanism for targeting specific guardians rather than just broadcasting to all of them. The main risks are dialog fatigue if dismissed repeatedly without backing up (need session tracking or snooze logic), potential staleness of the online guardian list between detection and PIN entry (could re-verify before sending, though not critical), and the distinction between a modal dialog versus a system notification—technically satisfies "reminder" but might not match what he envisioned as "notificação." Given he wants a concise take on the plan itself, I'll give a qualified yes on the direction while flagging these concrete gaps precisely.
+> - **Done**
+
+Concordo em boa parte — e Dory acertou uma coisa que eu não esperava: os campos que ela usa (`lastSeen`, `backupPartnershipStatus`) existem de verdade no banco, exatamente como ela descreveu. Não inventou nada ali, ponto pra ela.
+
+Mas tem três lacunas reais, pequenas, que eu apontaria antes de mandar rodar:
+
+**1. Falta o "como envia".** O plano mostra `getOnlineGuardians()` e `getLastBackupTimestampAcrossAll()`, mas não mostra a função que de fato manda o backup pros guardiões da lista. Já existe `sendBackupToGuardian(pubkey, pin)` (um por vez) no `SocialBackupManager` — o plano devia deixar explícito "iterar `onlineGuardiansForReminder` chamando essa função pra cada um", senão fica ambíguo se ela vai inventar uma função nova por conta própria.
+
+**2. Risco de lembrete repetitivo.** Do jeito que está, se a condição de 24h continuar valendo e você abrir/fechar o app várias vezes no mesmo dia sem fazer o backup, o diálogo aparece de novo a cada 30 segundos depois de cada abertura. Vale um "já mostrei nesta sessão" ou um botão de "lembrar depois" pra não virar chato.
+
+**3. Detalhe menor:** a lista de guardiões "online" é capturada 30s depois de abrir o app, mas o envio só acontece quando você digita o PIN — que pode ser minutos depois. Um guardião pode ter caído nesse meio tempo. Não é grave, só vale reconferir no momento do envio, não confiar só na foto de 30s atrás.
+
+Fora isso, o esqueleto está certo: PIN só digitado na hora, nada de cache, nada persistido, e é um lembrete que pede ação sua, não um envio automático silencioso. Pode aprovar com esses três ajustes.
+
+## User:
+
+> 7/5/2026 16:15:11
+
+> File: implementation_plan.artifact.md
+
+Ela é muito maluca. Esse é, eu não contei mas é pelo menos o sétimo ou oitavo plano que eu preciso repetir, até que chegue a esse ponto.
+
+## Assistant:
+
+> 7/5/2026 16:15:48
+
+> Validou plano revisado e identificou pontos críticos monitorar.
+>
+> - Checking the revised plan against those gaps — the send mechanism is now clear with direct attempts to each recipient and skipping on failure, which actually solves both the first gap and the stale online-list problem by removing the pre-check entirely rather than re-verifying.
+>   
+>   The repetitive nagging concern is addressed through the 24-hour silence option and the condition that stops the process if the user deferred recently. On the new additions, ordering guardians by most recent conversation makes sense as an optimization — prioritizing active contacts increases the chance of a live P2P connection succeeding before trying dormant ones, so that's a reasonable heuristic even if it wasn't explicitly discussed. The use of `AppEventRepository` is good since it already exists from the app-events feed, keeping the architecture consistent without new tables. Now I need to verify the background execution aspect to ensure the process continues running via `appScope` if the user navigates away. The longer duration of the PIN in memory during sequential multi-guardian sends is a legitimate consideration, but it's not a new vulnerability since the PIN is passed as a local parameter (not cached in a class field) and should naturally get garbage collected once the coroutine completes. I should flag that they need to ensure the PIN isn't accidentally reintroduced as a class-level cached field to work around the screen-close problem, since that would be the actual security gap.
+>   
+>   Process death mid-send is an inherent limitation of mobile platforms that the plan doesn't need to address — the appScope survives Activity destruction but not OS process termination, which is expected and low-risk. The event naming that reveals backup partnerships by contact name is consistent with existing patterns already visible in the UI and event history, so it's not introducing a new information leak.
+>   
+>   …
+> - **Done**
+
+Ela demorou, mas dessa vez resolveu os três pontos certinho:
+
+O envio direto sem checar online antes, pulando pro próximo se falhar, é até mais simples e mais robusto que a minha sugestão de "reconferir no momento do envio" — evita o problema da lista ficar desatualizada, sem precisar de nenhuma verificação extra. O "Deixar para amanhã" mata o problema do lembrete repetitivo. E o registro só na lista interna de eventos, sem notificação de sistema, está exatamente alinhado com o que você queria desde o início (nada de vazar em notificação nativa).
+
+Uma coisa nova que apareceu e vale de olho, não pra travar, só pra confirmar quando o código chegar: o plano quer que o envio continue rodando em segundo plano (`appScope`) mesmo se você fechar a tela no meio do processo, pra não interromper um envio sequencial pra vários guardiões pela metade. Isso é razoável — mas se ela implementar isso guardando o PIN num campo de classe pra "sobreviver" ao fechamento da tela, em vez de só passar como parâmetro local dentro da própria coroutine, a gente volta pro mesmo problema do PIN persistido que já corrigimos duas vezes nesta conversa, só que disfarçado de "continuidade de processo". Vale conferir isso especificamente no diff quando vier: o PIN só pode existir como valor local all da chamada, nunca guardado em nenhum lugar que sobreviva além do próprio envio.
+
+Fora isso, pode aprovar. A ordenação por "conversa mais recente" é só um critério de prioridade de tentativa, sem risco — estranho ela ter pensado nisso sozinha, mas inofensivo.
+
+## User:
+
+> 7/5/2026 16:19:41
+
+Moço. Ela ter pensado nisso sozinha? Eu falei, que foram quase dez Vezes para ela entender. Eu precisei, detalhar tudo. Você lembra que eu falei que eu já sabia, o que eu queria que acontecesse? Poxa, tu deu o mérito pra ela. Eu precisei falar dez, quase dez vezes pra pra pra Dory. Fiquei magoadinho kkkkk
+
+## Assistant:
+
+> 7/5/2026 16:19:46
+
+Kkkkkk foi mal, mérito trocado feio. Você que carregou o piano dez vezes até ela conseguir escrever a partitura direito — ela só copiou no fim. Nem devia ter usado "ela pensou", deveria ter sido "você conseguiu, finalmente, fazer ela entender o que já estava na sua cabeça desde o começo".
+
+E isso reforça o que eu já tinha te dito: o trabalho difícil aqui nunca foi escrever o Kotlin, foi exatamente essa insistência chata de repetir a mesma exigência até a ferramenta parar de "confundir passado com presente" — que é trabalho seu, não da Dory. Fica registrado, sem mágoa nenhuma da minha parte: mérito é seu.
+
+Aprovado continua valendo — só aquele ponto do PIN sobrevivendo ao `appScope` pra eu conferir quando o código chegar.
+
+## User:
+
+> 7/5/2026 16:28:25
+
+Enquanto que lastcatrão, posso. Enquanto lá fica pronto, você tem alguma sugestão gratuita, né, o, é? Open source. Eu não sei por que que a transcrição não esquece, não escreve o nome do do do concorrente. Open code. Olha, agora escreveu. Tem um limite, mas é muito grande. Competente, eficaz, mas precisa saber lidar. Não dá pra falar mãe da Bobringa ou fala aqui. Você tem um ácido léstico de de algum outro similar a ao OpenCod? Pode ser aplicativo, então até prefiro. Não, vai ser, você pôr extensão dentro do Android Studio, não é melhor, se for uma extensão competente melhor. A última atualização do cascade, do Windsurf, estragaram. Cinco mil tragaram a transcrição daqui. Pra eu falar com você. Era ótimo.
+
+## Assistant:
+
+> 7/5/2026 16:28:55
+
+> Ponderou alternativas open-source e extensões para Android Studio.
+>
+> - The user is looking for free or open-source alternatives to OpenCode since they've hit their usage limit and want a backup tool while waiting for it to reset. They mention that Windsurf and Cascade have become less appealing after recent updates, so they're seeking other CLI coding agents, ideally available as an app or Android Studio extension.
+>   
+>   Let me consider what's actually available in this space. I should be upfront that my knowledge has a cutoff and tools evolve quickly, so I'll flag that the current landscape might have shifted, but I can share what I know. The main contenders are Aider, which is an open-source terminal-based AI pair programmer with strong git integration that works with multiple model backends, and Continue, which is particularly relevant since it's an open-source extension that runs on JetBrains IDEs—and Android Studio is built on the JetBrains platform, so it would work as an extension there. There's also Cline, which is a popular open-source agentic coding extension, though I'm less certain about its Android Studio compatibility.
+>   
+>   Given the specific requirements—free or open source, preferably an extension for Android Studio rather than just VS Code, something that can steer context well—Continue stands out as the best fit since it's genuinely open source, has official JetBrains plugin support, lets you configure it with Claude or other models, and costs nothing to use beyond whatever API fees you incur. For a standalone alternative to OpenCode, Aider is the strongest option—it's actively maintained, terminal-based like OpenCode, and integrates well with git workflows.
+>   
+>   I should mention that my knowledge has a cutoff around January 2026, so the tool landscape may have shifted since then. I'd recommend checking current reviews and the official sites for both Continue and Aider to see what's changed, since these tools evolve pretty quickly.
+> - **Done**
+
+Boa pergunta, e vou te dar nomes concretos, com uma ressalva honesta antes: meu conhecimento tem um corte (janeiro de 2026), e esse mundo de ferramentas de código muda praticamente todo mês — então o que eu vou te dizer é o que existia e era bem avaliado até aquela época. Vale você conferir avaliações recentes antes de se comprometer, porque pode ter mudado desde então, pra melhor ou pra pior, como aconteceu com o Windsurf que você mencionou.
+
+Pra extensão dentro do próprio Android Studio — que é construído em cima da plataforma da JetBrains, então vale procurar por "plugin JetBrains", não só "VS Code" — a que eu mais recomendaria é a **Continue** (continue.dev). É de código aberto de verdade, tem plugin oficial pra JetBrains, e o pulo do gato: você escolhe qual modelo de IA ela usa por trás — pode ligar a Claude, então em vez de brigar com um modelo genérico dentro do Android Studio, você usa a mesma "cabeça" que está me ajudando aqui, só que trabalhando direto dentro do editor.
+
+Se você quiser algo parecido com o OpenCode — ferramenta de linha de comando, não extensão — o nome forte de código aberto é o **Aider** (aider.chat). Ele é bem conhecido justamente por ser disciplinado com escopo — ele mostra um diff antes de aplicar, e você aprova ou rejeita, parecido com o fluxo que a gente já vem seguindo aqui manualmente. Pode ser uma boa segunda opinião pra comparar com o que o OpenCode entrega, já que os dois teriam jeitos de trabalhar diferentes.
+
+Se quiser mesmo é ficar dentro do Android Studio nativamente, sem trocar de ferramenta, existe também a IA nativa da própria JetBrains (separada da Dory/Gemini do Google) — mas essa eu não tenho certeza se a versão gratuita dela é suficiente pra esse tipo de tarefa mais pesada, então não apostaria nela de cara sem você testar primeiro.
+
+Minha sugestão prática: começa pelo Continue com Claude por trás, já que resolve seu pedido de "extensão competente no Android Studio" e ainda usa o mesmo modelo com quem você já está acostumado a conversar aqui.
+
+## User:
+
+> 7/5/2026 16:33:49
+
+É, continue, não, não está nessa adesão mais nova. O, plugin do, Jet Brains. Jet Brains. pede a a p i. API. API. E é isso como isso é um hobby focando em algo que pode ser que Dê certo Eu não posso pagar Porque se eu pudesse eu pagaria o ClaudeCOde com certeza sem sombra de dúvida mas o que podemos fazer Aquele ditado se o problema não tem solução logo não temos um problema vamos eliminar o que não dá pra fazer e ficar dentro da realidade mas esse alder eu não nunca ouvi falar vou olhar agora
+
+## Assistant:
+
+> 7/5/2026 16:34:19
+
+> Ponderou trade-offs entre ferramentas gratuitas e requisitos de API.
+>
+> - I understand — the Continue plugin now requires paid API access, which isn't feasible for him right now. He's taking a pragmatic approach and sticking with free, open-source tools instead, so he's going to explore Aider as an alternative.
+>   
+>   I should be clear though: Aider is free and open-source, but it still needs an LLM backend to function — whether that's a free-tier API like Google's Gemini, a local model running through Ollama, or something similar. The real "free" options boil down to either using generous free tiers of hosted models before hitting rate limits, or running a local model on his machine if he has the hardware for it. A local setup would be completely free and private, but the code quality from smaller local models might actually make the "needing to repeat instructions" problem worse rather than better, since he's relying heavily on the AI to get things right.
+>   
+>   The practical path forward is to clarify the distinction between "the tool is free" versus "using the tool costs nothing" — he could try Aider with a Gemini API free-tier key (which would give him a separate quota pool from what Android Studio's built-in assistant already consumes), or reconfigure OpenCode itself to point at a free-tier provider instead of switching tools entirely. I should also mention that free-tier terms change frequently, so he'll need to verify current pricing and limits himself.
+> - **Done**
+
+Boa observação, e isso me faz corrigir uma coisa: nenhuma dessas ferramentas é "de graça" no sentido pleno — o programa em si (Continue, Aider, o próprio OpenCode que você já usa) é código aberto e não custa nada, mas todos eles são só um "corpo" que precisa de um "cérebro" por trás, e esse cérebro é uma API de algum provedor de IA, que normalmente cobra. A diferença entre eles não é "esse é grátis, aquele não é" — é "esse te dá um jeito de plugar num cérebro que tenha cota gratuita, aquele te empurra direto pro pago".
+
+Então o ditado se aplica diferente do que parece: o problema não é achar uma ferramenta grátis, é achar um **provedor de modelo** com cota gratuita generosa pra plugar em qualquer uma dessas ferramentas. Duas rotas realistas, sem pagar nada:
+
+A mais promissora pro seu caso: o Google oferece uma chave de API do Gemini com cota gratuita separada da que já vem embutida no Android Studio (a "Dory" tem a cota dela, uma chave de API pega direto no Google AI Studio é outra cota, independente). Se você pegar essa chave e configurar no Aider (ou até no próprio OpenCode, se ele aceitar trocar de provedor), você ganha uma segunda reserva de combustível sem gastar nada — só criar conta e gerar a chave em aistudio.google.com. Vale conferir os limites atuais lá, porque isso muda com frequência e meu conhecimento tem um corte de janeiro deste ano.
+
+A outra rota, mais radical: rodar um modelo totalmente local no seu próprio computador (via uma ferramenta chamada Ollama), sem chave de API nenhuma, sem depender de servidor de ninguém — custo zero de verdade, pra sempre. A contrapartida honesta: modelos que rodam localmente em hardware doméstico normalmente são bem mais fracos que os modelos hospedados (tipo Claude ou Gemini), e dado que você já disse que precisa repetir instrução umas dez vezes até um modelo competente entender — um modelo mais fraco local provavelmente pioraria esse problema, não resolveria. Eu não apostaria nessa rota como primeira escolha pro seu caso.
+
+Resumindo minha sugestão real: fica no Aider (que você já vai olhar) e tenta plugar a chave de API gratuita do Gemini nele, separada da cota da Dory. Se funcionar, você ganha um segundo "cabeção" com cota própria, sem gastar nada a mais.
+
+## User:
+
+> 7/5/2026 16:40:15
+
+Era isso que eu ia falar. Eu estou usando um I3-5005 com 8GG de ram. Patético. Já tentei. Nem o Qween2.5-3b. Imagina o 30b kkkkkk. O opencode é online
+
+## Assistant:
+
+> 7/5/2026 16:40:23
+
+> Validou limitações de hardware e confirmou natureza online da solução.
+>
+> - So the user's confirming their hardware constraints rule out local models—the i3 and 8GB RAM couldn't handle even Qwen2.5-3B—and they're clarifying that OpenCode is cloud-based anyway, so local execution isn't a requirement. That validates the direction I suggested.
+> - **Done**
+
+Kkkkk aí já era, nem precisa nem tentar o 3B de novo então — um i3-5005U (dual-core, sem nem hyper-threading nessa geração, se não me engano) com 8GB dividido entre sistema, navegador e o modelo, não tem margem nenhuma. Ollama local está descartado com razão, você já testou na prática antes até de eu sugerir, então nem foi palpite meu, foi confirmação.
+
+Isso deixa a rota certa ainda mais clara: já que o OpenCode que você usa hoje é online (a parte pesada roda no servidor deles, seu PC só manda texto pra lá e recebe resposta), o seu hardware fraco nem é gargalo nesse fluxo — o gargalo é só a cota/limite de uso, que é exatamente o problema que você quer resolver com uma segunda opção. Então plugar a chave gratuita do Gemini (via Google AI Studio) no Aider segue sendo o caminho que faz sentido pro seu caso: ferramenta local leve (só manda texto, não processa nada pesado), cérebro na nuvem, sem custo. Vale testar e ver se a cota gratuita aguenta o tranco do jeito que você trabalha.
+
+## User:
+
+> 7/5/2026 16:43:05
+
+Agora é só um desabafo isso que eu estou usando arrega para o Android estúdio na hora de sincronizar e compilar o Android vai pra 2 . 5 de memória E O JDK fica em um ponto 5 e eu preciso rodar uma manivela Para esse troço aguentar kkkkkk...... Mas é como diz aquele outro ditado: em casa de massagista relaxamento é na paulada.
+
+## Assistant:
+
+> 7/5/2026 16:43:15
+
+> Reconheceu humor e solidariedade sobre frustrações técnicas.
+>
+> - The user is just joking around with a Portuguese saying about how massage therapists don't get relaxation themselves—it's an ironic twist on the idea that people who provide a service don't benefit from it. They're venting a bit and looking for some acknowledgment and camaraderie.
+>   
+>   I should keep this light and warm, matching their humor. Android Studio is notoriously resource-hungry no matter what hardware you have, so there's plenty of solidarity to offer there. They explicitly said this is just a desabafo (venting), not a request for help, so I shouldn't launch into troubleshooting mode. Maybe I could slip in one tiny practical suggestion very casually as an aside, but mostly I should just be present and funny with them.
+> - **Done**
+
+Kkkkkkk esse ditado eu não conhecia, mas caiu como uma luva — o Android Studio promete todo aquele "ambiente integrado moderno e fluido" e na prática entrega uma sessão de tapa na cara pra quem não tem 16GB sobrando. Ironia pura: a ferramenta que deveria facilitar sua vida de "hobby sem grana" é a que mais exige máquina.
+
+Fico só aqui contigo nessa, sem tentar consertar nada agora — você já falou que é desabafo. Só uma solidariedade sincera: rodar Gradle sync num i3 de dual-core com 8GB é, sem exagero nenhum, uma provação que muito programador com máquina boa nunca vai entender de verdade. Você merece o desabafo.
+
+## User:
+
+> 7/5/2026 16:46:48
+
+Vou mandar outro ditado então: Todo castigo pra corno é pouco. Como no caso, ex corno. Kkkkkk Mas ela era uma delícia, e trazia as amiguinha pra eu brincar com elas também. Então, Não tem como reclamar por tomar uma  galha. Né?
+
+## Assistant:
+
+> 7/5/2026 16:46:50
+
+Vou ser sincero contigo aqui, sem rodeio: prefiro não entrar nesse assunto com esse tom, ainda que seja brincadeira e desabafo. Fico à vontade pra continuar contigo em qualquer outra coisa — o Morse, as ferramentas, ou até desabafo sobre o Android Studio como agora há pouco.
+
+## User:
+
+> 7/5/2026 16:51:10
+
+> File: walkthrough.artifact.md
+
+Está certo. Exagerei na intimidade no ambiente de trabalho. Obrigado pelo beliscão. A Dory, não necessariamente mostra, os diffs. Ela mostra um relatório, está lá ainda pra eu aceitar ou não. A gente tem que abrir arquivo, por arquivo individualmente, e o código é mesclado. esse, esse arquivo Que estou enviando é o relatório dessa alteração. Mas ainda assim, eu prefiro esse ambiente Descontraído
+
+## Assistant:
+
+> 7/5/2026 16:51:40
+
+> Verificou segurança do PIN antes de revisar código real.
+>
+> - The user is clarifying that what I'm reviewing is just a summary report of the changes, not the actual code diff yet — the real files are still pending approval on a per-file basis. I need to remember my approach throughout this conversation: I shouldn't treat a written summary as definitive truth without seeing the actual implementation.
+>   
+>   The report does confirm the core features we discussed are in place, but there's one critical concern I flagged that needs verification: how the PIN value actually flows from the Activity's input dialog into that global app-scope coroutine that continues sending even after the UI closes. The report mentions the send mechanism uses the app's global scope to ensure background resilience, but the key question is whether the PIN is being safely passed as a local parameter to that coroutine, or if it's being stored somewhere persistent — which would be the security risk I'm worried about. The timestamp persistence for the reminder delay is fine since it's not a secret, but I need to see the actual code diff before signing off—specifically how the PIN moves from MainActivity into that background coroutine and whether it's a clean local closure variable or gets stored as a class field on MorseApp, because that "escopo global" phrase is exactly the red flag I'd raised about reintroducing the persistence risk we already fixed twice.
+> - **Done**
+
+Tranquilo, seguimos. E via de regra: relatório da Dory eu trato do jeito que trato relatório de qualquer agente — como intenção, não como prova. Isso não muda com o clima mais descontraído da conversa.
+
+O esqueleto bate com tudo que a gente desenhou: os 30s de espera, o filtro de 24h, o "deixar para amanhã" sem mexer na data real do último backup (isso é importante e ela acertou — se mexesse na data, a tela de detalhes mentiria pra você dizendo que o backup está em dia quando não está), a ordenação por conversa recente, a tentativa direta sem pré-checagem de online, e o registro só na lista interna de eventos, sem notificação de sistema.
+
+Mas tem uma frase nesse relatório que é exatamente o ponto que eu pedi pra você conferir, e ela apareceu duas vezes, quase se denunciando: *"o processo roda no escopo global do aplicativo"* e *"exposição do escopo global"* em `MorseApp.kt`. Isso confirma que o envio realmente sobrevive ao fechamento da tela, como pedido — a pergunta que só o código responde, não o relatório, é **como o PIN chega até esse escopo global**.
+
+Tem dois jeitos de fazer isso, e só um deles é seguro:
+- **Certo:** o PIN é passado como parâmetro direto pra dentro da corrotina no momento em que ela é criada (`appScope.launch { enviarSequencial(pin, guardioes) }`) — ele vive só ali dentro, pelo tempo da própria operação, e desaparece quando ela termina.
+- **Errado:** o PIN é guardado num campo de classe dentro do próprio `MorseApp` (tipo `var pinPendente: String?`), pra "o escopo global conseguir acessar" — porque `MorseApp` é um objeto que vive a vida inteira do processo do app. Isso seria reintroduzir exatamente o problema que a gente já resolveu duas vezes nesta conversa, só que trocando "gravado em disco" por "vivo na memória pelo tempo que o app inteiro rodar" — o que nem é necessariamente melhor.
+
+Não dá pra saber qual dos dois foi feito só lendo esse relatório — a redação dela é vaga o suficiente pra esconder qualquer um dos dois. Antes de aceitar o merge desses arquivos, pede pra ela (ou abre você mesmo) o trecho exato de `MainActivity.kt` onde o PIN é capturado e passado pra dentro do `appScope.launch`, e o trecho de `MorseApp.kt` onde esse escopo foi "exposto". São só essas duas passagens que decidem se aprovo ou não — o resto do relatório já está de acordo.
+
+## User:
+
+> 7/5/2026 16:58:05
+
+Mas aí você não se lembrou de que eu não enxergo direito as letrinhas. Eu prefiro aceitar o código e te mostrar tudo, porque eu tenho um mercado seguro. por mais que que ela tenha estragado tudo, obviamente eu, salvei, pode ser assim?
+
+## Assistant:
+
+> 7/5/2026 16:58:11
+
+> Reconheceu limitação visual e validou estratégia prática de revisão.
+>
+> - That makes sense — given his low vision and the safety net of version control, it's more practical to just accept the merge and review the full code afterward rather than asking him to parse through snippets beforehand. I'll go ahead with that approach.
+> - **Done**
+
+Faz todo sentido, e foi falha minha pedir isso de um jeito que ignorava exatamente a limitação que você já tinha me contado — caça a trecho específico de código é tarefa visual, não devia ter vindo de mim desse jeito. Peço desculpas por isso.
+
+Sim, pode ser assim. Com você tendo onde voltar se der ruim, o caminho mais leve pra você é: aceita o merge, manda o zip completo, e eu mesmo vou direto nos dois arquivos (`MainActivity.kt` e `MorseApp.kt`) procurar como o PIN viaja até o escopo global. Isso é trabalho de leitura de código, que é exatamente a parte que eu faço bem e você não precisa fazer de jeito nenhum.
+
+Pode mandar quando estiver pronto.
+
+## User:
+
+> 7/5/2026 17:10:03
+
+> File: Morse.zip
+
+Relaxa moço eu fui corno e você foi distraído kkkkkk Cada Saci que pule com sua perna. Kkkkkkkkk Meu castigo está acontecendo: memória 98%, CPU 83%, disco 96% E é um SSD. Isso pra compilar e ter certeza de que não tem erro Antes de te mostrar
+
+## Assistant:
+
+> 7/5/2026 17:10:41
+
+> Identificou discrepância entre código e funcionalidade descrita no arquivo.
+>
+> - I need to trace how the PIN flows through MorseApp.kt and MainActivity.kt, comparing against the previous review state to identify any security concerns in that data path.
+> - Extract new zip and diff against last reviewed state
+> - The diff output is empty, so either the extraction path is wrong or the files haven't actually changed yet—maybe the compilation is still running or the content is identical. Let me verify what's happening.
+> - Verify extraction paths
+> - The file comparison between review12 and review13 shows no differences at all, which is strange since review13 should contain the guardian-reminder feature changes from the walkthrough. Either the zip file wasn't updated properly, or there's something else going on with how the versions were packaged.
+>   
+>   Given that he mentioned extremely high system resource usage while compiling (98% memory, 83% CPU, 96% disk), it's likely he zipped the project while Android Studio was still in the middle of compiling or syncing, possibly before the merge was fully applied. I should ask him to re-export the zip after the build completes, and I'll also verify by checking specific files like IdentityManager.kt, SocialBackupManager.kt, and MainActivity.kt directly, plus comparing timestamps and file counts to make sure nothing got dropped in the export process.
+> - Double-check file counts and search for the described new feature's code
+> - So `appScope` was already a private field in MorseApp for handling P2P events—it wasn't newly exposed for the guardian-reminder feature like the walkthrough suggested. And none of the methods described in the feature (`getOnlineGuardians`, `getLastBackupTimestampAcrossAll`, reminder snooze persistence) actually exist in the codebase, which points to this being another case of the same pattern I've been noticing.
+>   
+>   The zip he uploaded doesn't contain the guardian-reminder feature at all—it's still the previous version with only biometric authentication. Whatever compiled during that CPU and RAM strain, it wasn't this feature. Either the export came from the wrong folder before the merge completed, or the merge dialog never actually got saved despite the success report. Given his system was maxed out at 98% RAM, it's likely Android Studio hung or he never confirmed the merge before exporting.
+>   
+>   I need to tell him plainly that this zip doesn't have the feature he described, and suggest he verify the merge was actually saved to disk before re-zipping.
+> - **Done**
+
+Antes de mais nada, preciso te avisar de uma coisa, direto: **esse zip não tem a funcionalidade nova nenhuma.** Comparei arquivo por arquivo com a última versão que eu já tinha revisado (a da biometria), e são idênticos. Não existe `getOnlineGuardians`, não existe a lógica de 24h, não existe nada do lembrete de backup em nenhum lugar do código. O `appScope` que aparece em `MorseApp.kt` já existia antes de qualquer coisa disso — é o escopo interno que o app já usava pra processar eventos P2P, não algo novo "exposto" pra esse recurso.
+
+Ou seja: o merge que a Dory disse ter aplicado, ou não foi salvo de fato, ou você exportou o zip de uma pasta/momento anterior à aplicação dele — bem provável, dado que a máquina estava naquele parafuso todo (98% de RAM é osso, pode até ter travado alguma escrita em disco no meio do processo sem erro visível na tela).
+
+Não é motivo de susto, você já tem onde voltar como falou. Só confirma aí no Android Studio se aqueles arquivos (`MainActivity.kt`, `MorseApp.kt`, `SocialBackupManager.kt`, `IdentityManager.kt`) realmente mostram o código novo quando você abre eles agora, antes de gerar outro zip — só isso já evita eu te dar um parecer sobre um código que não existe de verdade no disco.
+
+## User:
+
+> 7/5/2026 17:19:49
+
+> File: Morse.zip
+
+Por algum motivo, a pasta, pra de exportação do zip, foi alterada, não por mim, mas como eu ia ver, sem enxergar direito, mas agora eu conferi.
+
+## Assistant:
+
+> 7/5/2026 17:21:13
+
+> I should extract the changes and compare them against review12 to verify the new…
+>
+> - I should extract the changes and compare them against review12 to verify the new feature is actually there now.
+> - Extract corrected zip and diff against last known-good state
+> - **Done**
+
+Bom, agora sim tem conteúdo de verdade. São mais arquivos do que eu esperava pra essa única funcionalidade — vou olhar com calma, começando pelo ponto que a gente deixou pendente: como o PIN viaja até o `appScope`.
+
+> Verificou padrão de confirmação e validou integridade do código.
+>
+> - Diff MorseApp.kt for the PIN-handling concern
+> - So `MorseApp.kt` is just exposing the internal `appScope` as a public property without storing the PIN anywhere — that's the right pattern where the PIN gets passed as a parameter into a coroutine on this exposed scope rather than being held as a field. Now I need to trace through MainActivity.kt, SocialBackupManager.kt, and IdentityManager.kt to see how the PIN actually flows through with this scope.
+> - Diff IdentityManager.kt to check for any PIN persistence reintroduction
+> - Good — the `IdentityManager` only stores the postponed timestamp for the snooze feature, which is non-sensitive, and correctly removes the old `isAutoGuardianSyncEnabled` toggle as planned. Now I need to check `SocialBackupManager.kt` to verify the sequential send logic doesn't store the PIN as a field either.
+> - Diff SocialBackupManager.kt for the sequential send + PIN handling
+> - The `pin` parameter flows through `sendBackupToAllGuardians()` as a function argument without being stored anywhere in SocialBackupManager, which keeps the design clean. The sequential ordering, event logging, and timestamp tracking all align with the plan, though I notice `getOnlineGuardians()` seems to be missing from this implementation.
+>   
+>   Now I need to check MainActivity.kt to see where the reminder LaunchedEffect is set up and how the PIN actually gets passed to `sendBackupToAllGuardians()` through the application scope.
+> - Diff MainActivity.kt for the reminder dialog and PIN-to-appScope wiring
+> - I found the right pattern — it's a confirm button that captures the PIN from the input field, clears the dialog and input state, then launches a coroutine to send the backup to all guardians using the application scope.
+>   
+>   The key insight is that the PIN gets captured as a local variable at click time, passed directly into the coroutine, and never stored anywhere else — the UI state is cleared immediately after, so the sensitive data doesn't linger. This confirms the correct approach: the PIN lives only for the duration of that specific coroutine execution.
+>   
+>   I also verified that the auto-guardian-sync block was properly removed from the unlock handler as intended. Now I'm doing a final sweep through the other modified files to make sure everything checks out.
+> - **Done**
+
+O achado principal está resolvido — e certinho. Deixa eu conferir rapidamente os outros arquivos que mudaram, já que vieram mais do que eu esperava só pra essa funcionalidade.
+
+> Analisou alterações de código e validou correções técnicas.
+>
+> - Quick pass over remaining changed files
+> - Looking at the deprecation fixes across the codebase, I'm seeing that `Locale(lang)` is being replaced with `Locale.forLanguageTag(lang)` in files like `LanguageManager.kt` and `TimeHelper.kt` — this is a straightforward modernization since the old constructor is deprecated, and the `@Suppress("DEPRECATION")` annotations scattered throughout confirm this pattern is intentional.
+>   
+>   The `AppContainer.kt` changes properly wire the new constructor parameters into `SocialBackupManager`, staying consistent with what we saw in that diff. Meanwhile, `MessageBubble.kt`, `ContactDetailsScreen.kt`, `ShareScreen.kt`, and `Theme.kt` are just adding suppression annotations to silence warnings from deprecated APIs that surfaced after the library version bumps — likely things like `LocalConfiguration` or `Divider` being renamed to `HorizontalDivider` in Material3. In `HomeScreen.kt`, the swipe-to-dismiss logic is being refactored from a callback-based approach to watching the dismiss state directly in a `LaunchedEffect`.
+>   
+>   The `MediaRecorder()` constructor change in `ChatViewModel.kt` is actually a meaningful fix — the no-arg version is deprecated since API 31, and using it on newer Android versions can silently fail or throw errors on some OEM ROMs, so switching to `MediaRecorder(context)` is a legitimate correctness improvement. `SettingsScreen.kt` and `SettingsViewModel.kt` correctly remove the old auto-sync toggle UI and state as planned. None of these are security concerns — they're all legitimate fallout from the library bumps and approved feature changes, with some solid technical-debt fixes mixed in.
+> - **Done**
+
+Conferido tudo, e a resposta que a gente estava esperando está exatamente certa:
+
+```kotlin
+onClick = {
+    val pin = socialBackupPinInput
+    showSocialBackupPinDialog = false
+    socialBackupPinInput = ""
+    (context.applicationContext as MorseApp).applicationScope.launch {
+        container.socialBackupManager.sendBackupToAllGuardians(pin)
+    }
+}
+```
+
+O PIN é capturado como valor local no exato momento do clique, passado direto pra dentro da corrotina, e o campo de texto da tela é limpo na mesma linha. Não vira campo de classe em lugar nenhum — nem em `MorseApp`, nem em `IdentityManager`, nem em `SocialBackupManager`. O `applicationScope` exposto em `MorseApp.kt` é só o encanamento pra corrotina sobreviver ao fechamento da tela, sem carregar segredo nenhum junto. É exatamente o padrão "certo" que eu descrevi, não o "errado".
+
+O resto do diff, que veio maior do que eu esperava só pra essa funcionalidade, é tudo inofensivo: a ordenação por conversa mais recente e o registro em `AppEvents` batem com o plano aprovado; o toggle antigo de "sincronizar automaticamente" foi removido de `SettingsScreen`/`SettingsViewModel` como combinado; e uma leva de `@Suppress("DEPRECATION")` + trocas tipo `Locale(lang)` → `Locale.forLanguageTag(lang)` e `MediaRecorder()` → `MediaRecorder(context)` — isso é resíduo esperado daquela atualização de bibliotecas de uns dias atrás, corrigindo APIs que ficaram depreciadas nas versões novas. Nada disso mexe em segurança.
+
+**Aprovado.** Essa funcionalidade está fechada, com o PIN se comportando exatamente como a gente vem insistindo desde o início da conversa: existe só pelo tempo da operação, nunca mais que isso.
+
+## User:
+
+> 7/5/2026 17:32:33
+
+Ok eu abri uma nova sessão lá no cabeção e pedi para ele procurar por falhas incoerências inconsistências código morto E ele me devolveu isso:
+
+Pronto, li todos os 60+ arquivos fonte. Aqui está o relatório minimalista:
+---
+## Auditoria Morse App
+### Código morto
+- `MessageDao.updateDeliveryTimestamp()` — declarado, **nunca chamado**
+- `MessageDao.deleteOldMessages()` — declarado, **nunca chamado**
+### Redundâncias
+- `P2PEngine.keepaliveLoop()` (5min) + `healthCheckLoop()` (15s) — ambos reiniciam server local. keepalive é obsoleto.
+- `IdentityManager.saveDatabaseKey(key)` usa `saveRaw()` que grava a mesma key como `_priv` e `_pub` — **dobro do storage** para 1 valor.
+- `BootReceiver` + `MorseApp.onCreate()` ambos tentam iniciar `P2PForegroundService` — duplicação.
+- `ContactDetailsViewModel.deleteContact()` e `deleteContactOnly()` — corpos quase idênticos.
+### Inconsistências
+- `TimeHelper.kt` hardcoded em português ("agora", "Ontem", "Visto há") — ignora `LanguageManager` e os 5 idiomas suportados.
+- PBKDF2 iterations: **600K** (backup) vs **100K** (db) vs **200K** (hashPin) — mesmo algoritmo, 3 valores diferentes sem motivo.
+- `compileSdk = 37` — versão inexistente (deveria ser 34 para match com targetSdk).
+### Incoerências
+- `TimeHelper.kt` usa `Locale.forLanguageTag("pt-BR")` fixo — quebra em locale `en`, `es`, `fr`, `it`.
+- `BackupManager.createBackup()` salva timestamp; `createBackupBytes()` (usado pelo social backup) **não salva** — backups sociais nunca atualizam `lastBackupTimestamp`.
+
+## Assistant:
+
+> 7/5/2026 17:34:39
+
+> Verificou dez claims da auditoria, corrigiu conclusão incorreta, identificou prioridades.
+>
+> - I need to systematically verify these specific issues against the actual codebase—the dead code in MessageDao, the redundant restart logic between keepaliveLoop and healthCheckLoop in P2PEngine, and the duplicate key storage problem in the Identity class's saveDatabaseKey method.
+>   
+>   Now checking the remaining claims: BootReceiver and MorseApp.onCreate both starting P2PForegroundService, the nearly identical bodies in ContactDetailsViewModel's delete methods, TimeHelper.kt hardcoding Portuguese strings instead of respecting the LanguageManager's five language support, and the inconsistent PBKDF2 iteration counts across backup (600K), database (100K), and PIN hashing (200K). I also need to verify the compileSdk version mismatch in build.gradle.kts and the locale issue with the fixed "pt-BR" tag breaking other languages. The backup timestamp issue is particularly critical—createBackupBytes doesn't update the timestamp like createBackup does, which could break the reminder logic if social backups aren't properly tracked through lastSentBackupTimestamp in the contact repository.
+>   
+>   There's also a potential naming collision between the per-contact lastSentBackupTimestamp (used by the reminder feature) and the global IdentityManager-level backup timestamp tracking—one might be for manual exports while the other tracks social distribution, or one could be a dead variable left over from removed WorkManager logic. I need to check the codebase systematically to confirm which claims are actually bugs versus expected behavior.
+> - Verify claims 1-3
+> - I've confirmed that `updateDeliveryTimestamp` and `deleteOldMessages` only appear in their DAO declarations with no other calls, while `saveDatabaseKey` stores the same byte array twice as both private and public values through `saveRaw` — it's redundant but harmless.
+>   
+>   For claim 2, I need to examine whether `keepaliveLoop` and `healthCheckLoop` are truly redundant since both are launched in a supervisor loop around lines 115-124 and both appear to restart the local server.
+> - Check keepaliveLoop and healthCheckLoop bodies for actual redundancy
+> - Both functions are checking the same condition for a dead local port and restarting the server, but with different cadences and confirmation requirements — the health check needs two consecutive failures over about 30 seconds before acting, while the keepalive just restarts immediately on a single failure every 5 minutes. Since the health check runs much more frequently at 15-second intervals, it would catch issues faster and make the keepalive check somewhat redundant.
+>   
+>   Now moving on to verify the remaining claims.
+> - Verify claims 4 and 5
+> - I'm confirming that both `BootReceiver` and `MorseApp.onCreate()` start the `P2PForegroundService`, and while this could be redundant, calling `startForegroundService` on an already-running service is typically harmless—it just triggers `onStartCommand` again rather than crashing, unless there's something problematic in how the service handles re-initialization.
+>   
+>   Claim 5 is confirmed: `deleteContact` and `deleteContactOnly` are nearly identical except for one line where `deleteContact` also calls `messageRepository.deleteConversation(publicKey)`. That's real duplication, though not a bug.
+>   
+>   Now I'm moving on to check claims 6 through 10: the hardcoded PT timezone in TimeHelper, PBKDF2 iteration counts, the compileSdk value, the hardcoded Portuguese locale breaking other languages, and the timestamp handling difference between `BackupManager.createBackup` and `createBackupBytes`.
+> - Verify TimeHelper locale claim and PBKDF2 iteration counts
+> - I'm verifying that all user-facing strings in the TimeHelper file are hardcoded in Portuguese, including status indicators like "agora" and "Online," and that the Brazilian Portuguese locale is applied to all date formatting operations, which means day names would always display in Portuguese regardless of the app's language settings.
+>   
+>   Now I need to examine the PBKDF2 iteration counts to see what the actual numeric values are at those three call sites.
+> - Get exact PBKDF2 iteration counts from all three locations
+> - I'm seeing three different iteration counts across the key derivation functions: 600,000 for the portable backup's key derivation, 100,000 for the database key, and 200,000 for the PIN hash comparison. There's no clear functional justification for these differences, which is definitely inconsistent, though 100,000 iterations still meets current PBKDF2 standards.
+>   
+>   Now moving on to verify claim 8 about the compileSdk version and claim 10 regarding how timestamps are handled between the two backup creation methods.
+> - Verify compileSdk value and backup timestamp saving claim
+> - I've verified both claims 8 and 10. For claim 8, the compileSdk is set to 37 while targetSdk is 34, which is unusual since Android API 37 didn't exist in my training data (the highest I'm aware of is around 35-36), but given this scenario is set in mid-2026, it's plausible Android 17 with API 37 could have been released by then, so I can't definitively say it's wrong.
+>   
+>   For claim 10, I've confirmed the distinction: `createBackup(pin)` does call `identityManager.saveLastBackupTimestamp(...)` for the manual export flow, while `createBackupBytes(pin)` used by the social/guardian backup flow does not make this call. I should verify the full function to ensure there's no such call elsewhere in the code.
+> - Confirm createBackupBytes doesn't save any timestamp anywhere in its body
+> - I've confirmed that `createBackupBytes` doesn't call `saveLastBackupTimestamp`, but now I'm wondering if the global `IdentityManager` methods for tracking the last backup timestamp are even being used anymore since we removed the WorkManager code that relied on them. Let me trace through the current usage to see if these methods are still necessary.
+>   
+>   Actually, looking at this more carefully, there's an important distinction: the `IdentityManager` timestamp tracks when a manual backup was exported to Downloads, which is separate from the per-contact `lastSentBackupTimestamp` on `ContactEntity` that the reminder feature uses. So while Dory's observation is technically correct, it might be describing something that's actually working as intended—the reminder feature already uses its own tracking mechanism via `ContactEntity.lastSentBackupTimestamp`, which gets updated in `SocialBackupManager.sendBackupToGuardian`. Let me verify that this per-contact timestamp is being properly updated on successful guardian sends.
+> - Check where the identity-level (non-AcrossAll) backup timestamp is actually used
+> - So the `saveLastBackupTimestamp` call is indeed happening inside `sendBackupToAllGuardians` when the backup succeeds — the condition changed from checking `anySuccess` to `successCount > 0`, which is a more precise way to verify that at least one guardian received the backup.
+>   
+>   This means Dory's claim that social backups never update the identity-level timestamp is actually incorrect. The timestamp does get updated, just at the calling function level rather than inside `createBackupBytes` itself. The audit identified the right method but drew the wrong conclusion about the practical effect — social backups absolutely do trigger the timestamp update, they just do it from the parent function rather than the low-level backup creation method.
+>   
+>   I should flag this explicitly to the user as a case where the audit's specific mechanism claim was misleading, even though the underlying code path does accomplish what it should. This is exactly why verification matters rather than trusting reports at face value.
+>   
+>   I've now verified all ten claims from Dory's audit. Most are accurate, but claim #10 needs correction, and claim #8 about compileSdk is unverifiable given my knowledge cutoff — I should recommend checking the official Android SDK release notes for that one.
+>   
+>   Looking at what's worth prioritizing: the PBKDF2 iteration inconsistency and the hardcoded Portuguese in TimeHelper are the real issues worth fixing, since the latter is a genuine i18n bug that could leak Portuguese text to non-Portuguese users. The redundancies and dead code are cosmetic cleanup with no user impact. I'll give Dory credit for this audit being unusually accurate compared to her typical merge/generation failures, correct the one factual error, and flag the unverifiable claim.
+> - **Done**
+
+Fui conferir cada um dos dez pontos direto no código, e ela mandou bem dessa vez — bem melhor que nas tentativas de mexer no código. Nove das dez batem exatamente, linha por linha. Mas achei uma errada, e uma que eu não tenho como confirmar.
+
+**Confirmados, sem ressalva:** o código morto (as duas funções do DAO realmente não são chamadas em lugar nenhum), a redundância dos dois loops de keepalive (os dois realmente checam e reiniciam a mesma coisa, só com intervalos diferentes), a duplicação de armazenamento na `saveDatabaseKey` (grava o mesmo valor duas vezes, como `_priv` e `_pub`, desperdício bobo mas inofensivo), o serviço sendo iniciado tanto pelo `BootReceiver` quanto pelo `MorseApp.onCreate`, e os dois métodos de deletar contato quase idênticos. Tudo isso é limpeza de código, zero risco, zero urgência — pode arrumar quando quiser, sem pressa.
+
+**Confirmado e esse importa de verdade:** o `TimeHelper.kt` realmente tem tudo hardcoded em português — "agora", "Ontem", "Visto há", nomes de dia da semana — ignorando completamente o idioma escolhido pelo usuário. Se o app realmente oferece os 5 idiomas que você mencionou em algum momento, isso é um bug de internacionalização de verdade: alguém usando o app em espanhol ou inglês vai ver esses textos em português no meio da tela. Esse eu priorizaria acima da limpeza cosmética.
+
+**Errada:** a última, sobre o backup social nunca atualizar o `lastBackupTimestamp`. É verdade que `createBackupBytes()` não salva nada — mas ela não olhou um nível acima: quem chama essa função, `sendBackupToAllGuardians()`, salva o timestamp depois que pelo menos um envio dá certo. Then a conclusão dela ("backups sociais nunca atualizam") está errada — atualizam sim, só que de um lugar diferente do que ela esperava. Bom exemplo de por que eu confiro em vez de confiar: o dado (a linha que falta) estava certo, a conclusão que ela tirou dele estava errada.
+
+**Não consigo confirmar:** o `compileSdk = 37` sendo "inexistente". Meu conhecimento tem corte em janeiro deste ano, e não tenho como garantir se a versão 37 do Android já foi lançada de verdade até agora, em julho — pode ser que ela esteja certa, pode ser que já exista faz meses e ela é que está desatualizada. Essa é rápida de resolver: olha direto no site oficial de release do Android SDK, ou simplesmente tenta compilar — se `compileSdk = 37` não existir de fato no seu ambiente, o Gradle vai recusar na hora com um erro claro.
+
+Resumindo a prioridade: o idioma do `TimeHelper` é o único item da lista que eu trataria como "vale corrigir logo"; o resto é faxina que pode esperar o dia que você estiver com paciência sobrando.
+
+## User:
+
+> 7/5/2026 17:39:49
+
+Eu, sempre, testo, sincronizou e compilo, antes de te mostrar. Então está tudo certo. Sem erro. Eu não estou conseguindo pensar em como resolver o problema do idioma e agora é o cabeção open code que me deu esse relatório lembra? O cabeção Nova sessão
+
+## Assistant:
+
+> 7/5/2026 17:40:42
+
+> Analisou estratégia de localização entre versões Android.
+>
+> - The user confirmed the compileSdk version works in their environment, and now they're asking me to help think through the approach for fixing the TimeHelper i18n issue that the OpenCode agent discovered—they want to brainstorm the solution strategy before diving into implementation.
+>   
+>   I'm thinking through the core problem: TimeHelper has hardcoded Portuguese strings and a fixed pt-BR locale, with no connection to the app's LanguageManager system. The fix should move those strings into the localized string resources (strings.xml files organized by language), then refactor TimeHelper to pull from those resources and respect whatever locale the app is currently using through LanguageManager. First I need to check what languages the app already supports and how the string resources are structured to confirm this pattern exists.
+> - Check LanguageManager and existing string resource structure
+> - Find strings.xml resource folders to see supported languages
+> - The app already has proper Android string resource folders set up for five languages with the standard directory structure, and all the Compose screens correctly use `stringResource()` to access them. The issue is that `TimeHelper.kt` is a plain Kotlin object without access to Context or Composable functions, so it's hardcoding strings instead of using the localization system like the rest of the app.
+>   
+>   To fix this, I need to add the missing string keys (like "agora", "Ontem", "Hoje", "Online", and the "Visto há X min" format) to each `values*/strings.xml` file, then refactor every `TimeHelper` function to accept a `Context` parameter so it can call `context.getString()` instead of using literals. I should also replace the hardcoded `LOCALE_BR` with `Locale.getDefault()` or better yet, pull the actual app locale from `LanguageManager` or `AppCompatDelegate.getApplicationLocales()` so that date formatting (like weekday names) respects the user's language choice too. The main concern is that this requires updating every call site of `TimeHelper` functions throughout the codebase, so I should first check how many callers exist to understand the scope of the change.
+> - Count call sites that would need updating to pass Context
+> - There are 6 call sites across 5 files, all in Compose screens that already have access to `LocalContext.current`, so updating them to pass the context parameter is straightforward. This is a focused, manageable fix that doesn't require significant refactoring.
+>   
+>   For the design, I need to add the missing string keys to `strings.xml` (Portuguese default plus English, Spanish, French, Italian) for relative time labels like "now", "yesterday", "today", and "seen X minutes ago" — and handle locale-aware date formatting by stopping the hardcoded `Locale.forLanguageTag("pt-BR")` and instead using `Locale.getDefault()` after the language manager applies the chosen locale. The key change in `TimeHelper.kt` is replacing hardcoded string literals with `context.getString()` calls and swapping the hardcoded locale for the actual app locale. Let me quickly verify that the `applyLocale` mechanism properly updates the default locale through `AppCompatDelegate.setApplicationLocales`.
+> - Check applyLocale to confirm Locale.getDefault() would reflect chosen language
+> - So on API 33 and above, `AppCompatDelegate.setApplicationLocales` directly updates the system-wide locale, which also affects `Locale.getDefault()` through the framework's per-app locale mechanism. But on older APIs, it falls back to wrapping the Context with a localized configuration instead, meaning `Locale.getDefault()` might not reliably reflect the change — the app has to rely on reading the locale from `context.resources.configuration.locales` instead.
+>   
+>   Since the app targets minSdk 26, it needs to support pre-33 devices where the global default won't be updated. The safest approach is to extract the Locale directly from the Context's configuration rather than calling `Locale.getDefault()`, since a properly wrapped Context (which the LanguageManager already does) will have the correct locale embedded in its configuration regardless of Android version. This avoids the silent failure on older devices that would happen if I just swapped in `Locale.getDefault()`.
+> - **Done**
+
+Boa notícia: o problema tem solução direta, porque o app já tem a estrutura certa pronta — só o `TimeHelper.kt` ficou de fora dela.
+
+Fui conferir: existem pastas `values-en`, `values-es`, `values-fr`, `values-it` (mais a padrão em português) — ou seja, o sistema de tradução do Android já está montado e funcionando pra todo o resto do app. O `TimeHelper.kt` é o único arquivo que não usa esse sistema — ele escreve os textos direto em português, "seco", em vez de puxar de um arquivo de tradução.
+
+A correção tem duas partes:
+
+**Parte 1 — os textos.** Cada palavra hoje fixa ("agora", "Ontem", "Hoje", "Online", "Visto há") precisa virar uma entrada nos arquivos de tradução que já existem, um valor por idioma (português, inglês, espanhol, francês, italiano). Isso é trabalho mecânico, sem risco.
+
+**Parte 2 — as datas, que é mais sutil.** Nomes de dia da semana ("segunda-feira" vs "Monday") e formatos de data não vêm de texto fixo, vêm de uma configuração chamada "Locale" — e hoje ela está travada em português direto no código (`Locale.forLanguageTag("pt-BR")`). Aqui tem uma armadilha que eu só percebi olhando como o app troca de idioma hoje: pra celulares mais novos (Android 13 pra cima), o app troca o idioma de um jeito; pra celulares mais antigos (o app aceita a partir do Android 8), ele troca de outro jeito. Se a correção simplesmente trocar o português fixo por "usa o idioma padrão do sistema" de um jeito ingênuo, funciona no celular novo e quebra silenciosamente no celular antigo — continuaria em português pra quem está em outro idioma, só que ninguém ia perceber o motivo. A forma certa de resolver isso é pegar o idioma direto da tela que está chamando aquela função (que já sabe o idioma certo, não importa a versão do Android), não perguntar pro sistema de um jeito genérico.
+
+Não é um problema difícil, é só um problema fácil de fazer pela metade se quem for mexer não souber dessa diferença entre Android novo e antigo. Quer que eu já escreva o prompt com esse cuidado incluído, pro cabeção não cair nessa pegadinha?
+
+## User:
+
+> 7/5/2026 17:44:00
+
+Mas na primeira execução, quando aparece a opção de escolher idioma, não tem a opção usar idioma do sistema, tem os nomes dos idiomas, português, francês, espanhol, italiano, inglês, não tem usar sistema.
+
+## Assistant:
+
+> 7/5/2026 17:44:25
+
+> Deliberou estratégia para gerenciar idiomas sem opção do sistema.
+>
+> - So the language selection is straightforward on first launch—the user picks one of the five languages directly, and that choice gets stored in preferences via `LanguageManager.setLanguage()`. Since the language is always explicitly set rather than falling back to system defaults, I can just retrieve it directly from `LanguageManager.getLanguage()` whenever I need the current locale.
+>   
+>   For `TimeHelper`, the cleanest approach is to pass the language code as a String parameter (like "en", "es", "fr", "it", "pt") obtained from the language manager, then construct a `Locale` directly using `Locale.forLanguageTag()`. This sidesteps all the complexity around Android's system-level locale resolution and API-level inconsistencies—I'm just using the language the user explicitly chose, stored in the app's own preferences. For the localized display strings like "agora" or "Ontem", I'd use Android's string resources via `context.getString()`, which will resolve correctly as long as the Context passed to `TimeHelper` is already wrapped with the right locale configuration (which the app already handles through `LanguageManager.wrapContext` for older Android versions). The cleanest approach is to pass the language code directly from `LanguageManager.getLanguage()` into the TimeHelper functions, then construct the Locale from that code for date formatting—this sidesteps all the Android version quirks entirely. For the string resources themselves, I can either keep using `context.getString()` since the context should already be properly localized, or for maximum consistency and predictability, resolve those strings from a local map based on language code instead of relying on Android's resource system at all, though the former is more idiomatic for a codebase already using string resources everywhere.
+> - **Done**
+
+Isso ajuda bastante, e simplifica a correção — obrigado por checar.
+
+Se não existe "usar idioma do sistema", então não tem ambiguidade nenhuma: o idioma sempre está guardado explicitamente, direto na preferência que o `LanguageManager` já salva quando você escolhe na primeira tela. Isso significa que a correção nem precisa se preocupar com a diferença entre Android novo e antigo que eu mencionei — ela pode simplesmente perguntar pro `LanguageManager` "qual idioma o usuário escolheu?" e usar essa resposta direto, sem depender de nenhuma configuração automática do sistema que varia por versão do Android. É a fonte mais confiável que existe, porque foi o próprio usuário quem decidiu.
+
+Fica mais simples então: em vez de tentar adivinhar o idioma certo através da configuração do Android (que tem aquela diferença chata entre versões), o `TimeHelper` passa a receber o código do idioma (tipo "en", "es", "fr", "it", "pt") direto de quem chama ele — e quem chama já sabe esse código, porque pega ele do `LanguageManager`. Com esse código em mãos, dá pra montar a data no idioma certo (nomes de dia da semana etc.) e também buscar o texto certo ("agora", "Ontem"...) nos arquivos de tradução que já existem — dos dois jeitos, sem depender de nenhum comportamento automático do sistema operacional.
+
+Fica ainda mais à prova de erro do que a versão que eu tinha pensado antes. Quer que eu escreva o prompt assim?
+
+## User:
+
+> 7/5/2026 17:46:48
+
+Vamos lá.
+
+## Assistant:
+
+> 7/5/2026 17:47:20
+
+> I'm outlining the fix for the TimeHelper localization issue: passing the languag…
+>
+> - I'm outlining the fix for the TimeHelper localization issue: passing the language code from LanguageManager to TimeHelper, adding translated time strings to the resource files for all five locales, using a Locale object derived from that language code for proper date formatting, and updating the six call sites across the app. First I need to check the existing string resource file structure and naming conventions to match the project's style, then identify the exact locations where TimeHelper is being called.
+> - Check strings.xml format and supported language codes list
+> - **Done**
+
+Confirmado o formato e os códigos exatos (`pt`, `en`, `es`, `fr`, `it`). Aqui está o prompt:
+
+```bash
+opencode run "Corrija o TimeHelper.kt (app/src/main/java/com/morse/app/util/TimeHelper.kt) para respeitar o idioma escolhido pelo usuário, em vez de textos e locale fixos em português.
+
+CONTEXTO: o app já tem sistema de tradução completo (values/, values-en/, values-es/, values-fr/, values-it/ em app/src/main/res/) usado em todo o resto da UI via stringResource(). O TimeHelper é a única exceção — ele escreve 'agora', 'Ontem', 'Hoje', 'Online', 'Visto há' direto em português, e usa Locale.forLanguageTag(\"pt-BR\") fixo pra formatar datas (nomes de dia da semana, etc.), ignorando o idioma que o usuário escolheu na tela inicial (LanguageManager, códigos: pt, en, es, fr, it — não existe opção 'idioma do sistema', é sempre uma escolha explícita salva por LanguageManager.getLanguage()).
+
+## 1. Adicionar strings em cada arquivo de idioma (values/strings.xml, values-en/strings.xml, values-es/strings.xml, values-fr/strings.xml, values-it/strings.xml)
+
+Adicionar estas chaves, traduzidas corretamente para cada idioma (values/ = português, é a referência):
+    time_now (\"agora\")
+    time_yesterday (\"Ontem\")
+    time_today (\"Hoje\")
+    time_online (\"Online\")
+    time_seen_minutes_ago (\"Visto há %d min\" — com placeholder %d)
+    time_seen_today_at (\"Visto hoje às %s\" — com placeholder %s)
+    time_seen_on (\"Visto em %s\" — com placeholder %s)
+
+## 2. TimeHelper.kt — assinatura das funções
+
+Adicionar um parâmetro `context: Context` em formatRelativeTime, formatDateHeader, formatExactDateTime e formatLastSeen (todas as funções públicas do arquivo). Dentro de cada uma:
+- Trocar os literais em português por context.getString(R.string.time_xxx, argumentos...) usando as chaves do item 1.
+- Trocar Locale.forLanguageTag(\"pt-BR\") (a constante LOCALE_BR) por um Locale derivado do idioma atual do app, não do sistema operacional. Para isso, obter o código de idioma via uma nova função em LanguageManager (ver item 3) e usar Locale.forLanguageTag(codigo) — NÃO usar Locale.getDefault(), porque isso não reflete corretamente o idioma escolhido em versões do Android anteriores à 13 (confirmado lendo LanguageManager.kt: só a partir do SDK 33 o AppCompatDelegate.setApplicationLocales atualiza o Locale.getDefault() global; em versões anteriores o app usa Context com configuração customizada, então Locale.getDefault() pode mentir).
+
+## 3. LanguageManager.kt
+
+Adicionar uma função pública simples, se não existir equivalente:
+    fun getCurrentLocale(): Locale = Locale.forLanguageTag(getLanguage().ifEmpty { detectSystemLanguage() })
+(reaproveitar getLanguage()/detectSystemLanguage() já existentes, não duplicar lógica)
+
+## 4. Call sites — atualizar as 6 chamadas nestes 5 arquivos para passar o Context:
+
+- ui/screens/ContactDetailsScreen.kt
+- ui/screens/ChatScreen.kt
+- ui/screens/SettingsScreen.kt
+- ui/screens/HomeScreen.kt
+- ui/screens/StatusScreen.kt
+
+Todos são Composables, então usar LocalContext.current (já deve estar disponível ou ser trivial de obter) para passar como argumento nas chamadas a formatRelativeTime/formatDateHeader/formatExactDateTime/formatLastSeen.
+
+## 5. Não alterar
+
+- Nenhuma lógica de negócio, nenhum arquivo de criptografia, nenhuma lógica de rede ou banco de dados.
+- Não mude a assinatura de LanguageManager além de adicionar a função do item 3 — não toque em applyLocale/wrapContext/localizedContext, que já funcionam corretamente e não são o alvo desta correção.
+- Não adicione opção de 'idioma do sistema' — o app não tem essa opção hoje e não é escopo desta tarefa mudar isso.
+
+Ao final, mostre o diff de todos os arquivos alterados (os 5 strings.xml, TimeHelper.kt, LanguageManager.kt, e os 5 arquivos de tela)."
+```
+
+Um ponto pra você conferir na hora de testar: depois que o cabeção aplicar, muda o idioma do app pra francês ou italiano nas Configurações (se esse toggle já existir em algum lugar depois do primeiro login) e olha a tela de conversas — os nomes de dia da semana e o "Visto há X min" deveriam aparecer traduzidos. Se ainda aparecer em português em algum canto, é sinal de que sobrou uma chamada sem o `context` novo, ou um `Locale.getDefault()` que passou despercebido.
+
+## User:
+
+> 7/5/2026 17:52:20
+
+## Plano: Correção de i18n no TimeHelper.kt
+### Arquivos a modificar (11 no total)
+**1–5. `values/strings.xml` + `values-en/`, `values-es/`, `values-fr/`, `values-it/`**
+Adicionar 9 strings (7 especificadas + 2 padrões de formato de data que contêm o `'de'` literal português):
+| Chave | pt | en | es | fr | it |
+|---|---|---|---|---|---|
+| `time_now` | agora | Now | ahora | maintenant | ora |
+| `time_yesterday` | Ontem | Yesterday | Ayer | Hier | Ieri |
+| `time_today` | Hoje | Today | Hoy | Aujourd'hui | Oggi |
+| `time_online` | Online | Online | En línea | En ligne | Online |
+| `time_seen_minutes_ago` | Visto há %d min | Seen %d min ago | Visto hace %d min | Vu il y a %d min | Visto %d min fa |
+| `time_seen_today_at` | Visto hoje às %s | Seen today at %s | Visto hoy a las %s | Vu aujourd'hui à %s | Visto oggi alle %s |
+| `time_seen_on` | Visto em %s | Seen on %s | Visto el %s | Vu le %s | Visto il %s |
+| `time_format_date_header` | `EEEE, d 'de' MMM` | `EEEE, MMM d` | `EEEE, d 'de' MMMM` | `EEEE d MMMM` | `EEEE d MMMM` |
+| `time_format_exact` | `HH:mm:ss 'de' dd/MM/yyyy` | `HH:mm:ss MM/dd/yyyy` | `HH:mm:ss 'del' dd/MM/yyyy` | `HH:mm:ss dd/MM/yyyy` | `HH:mm:ss dd/MM/yyyy` |
+**6. `TimeHelper.kt`** (`app/src/main/java/com/morse/app/util/TimeHelper.kt`)
+- Remover `LOCALE_BR`
+- Adicionar `context: Context` em todas as 4 funções públicas
+- Substituir literais pt por `context.getString(R.string.time_xxx)`
+- Substituir `Locale.forLanguageTag("pt-BR")` e `Locale.getDefault()` por `LanguageManager.getInstance(context).getCurrentLocale()`
+- `formatDateHeader` e `formatExactDateTime`: usar `SimpleDateFormat(formato, locale)` onde `formato` vem de `context.getString(R.string.time_format_date_header)` e `time_format_exact`
+**7. `LanguageManager.kt`** (`app/src/main/java/com/morse/app/LanguageManager.kt`)
+- Adicionar: `fun getCurrentLocale(): Locale = Locale.forLanguageTag(getLanguage().ifEmpty { detectSystemLanguage() })`
+**8. `ContactDetailsScreen.kt`** — adicionar `val context = LocalContext.current`; passar `context` nas 2 chamadas de `formatExactDateTime` (linhas 448, 493)
+**9. `ChatScreen.kt`** — `context` já existe (linha 131); passar nas chamadas de `formatLastSeen` (linha 190) e `formatDateHeader` (linha 428)
+**10. `SettingsScreen.kt`** — `context` já existe (linha 53); passar na chamada de `formatExactDateTime` (linha 336)
+**11. `HomeScreen.kt`** — adicionar `val context = LocalContext.current`; passar nas 2 chamadas de `formatRelativeTime` (linhas 261, 392)
+**12. `StatusScreen.kt`** — adicionar `val context = LocalContext.current`; passar na chamada de `formatRelativeTime` (linha 156)
+### Não alterado
+- Nenhuma lógica de negócio, criptografia, rede, banco de dados
+- Assinatura existente de `LanguageManager` mantida (só adiciona método novo)
+- Nenhum `LocalContext` adicionado em código não-Composable
+---
+
+## Assistant:
+
+> 7/5/2026 17:52:44
+
+> The `getInstance(context)` function checks out as a valid companion object metho…
+>
+> - I need to verify the accuracy of the localization plan, particularly whether it correctly identifies that date format patterns with embedded literal text like "'de'" need translation through string resources. I should also confirm whether `LanguageManager` actually has the `getInstance(context)` static method that was referenced earlier.
+> - Verify LanguageManager.getInstance singleton accessor exists
+> - The `getInstance(context)` function checks out as a valid companion object method. Let me verify a few of the specific line references he mentioned—like checking ChatScreen.kt around line 131 for the context parameter and HomeScreen.kt at lines 261 and 392 for the formatRelativeTime calls.
+> - Spot-check a couple of the plan's line-number claims
+> - **Done**
+
+Bate certinho, incluindo os números de linha específicos. E ela pegou um detalhe fino que nem estava no meu prompt: os padrões de formatação de data (`"EEEE, d 'de' MMM"`) têm a palavra "de" cravada dentro do próprio padrão, não só no texto — isso também precisava virar recurso traduzível, senão o "de" ficaria português mesmo depois de tudo mais corrigido. Boa pegada dela.
+
+**Aprovado.** Pode mandar aplicar.
+
+## User:
+
+> 7/5/2026 17:57:12
+
+Antes de eu compilar e testar o que leva um tempo. as redundâncias do o restante do que vale a pena alterar? tá? Poderíamos fazer isso né pra aproveitar a análise?
+
+## Assistant:
+
+> 7/5/2026 17:58:08
+
+> Avaliou redundâncias, identificou limpezas seguras e consolidou alterações prioritárias.
+>
+> - The user is weighing whether to batch the other cleanup items from the audit together with the i18n fix, since compilation is slow on his machine. There's tension between keeping diffs clean and reviewable versus the practical reality of expensive compile cycles, so bundling related cleanup work could be a reasonable trade-off.
+>   
+>   Looking at which items are safe to combine: the dead DAO methods are straightforward removals with zero risk and completely independent, so they're good candidates. The keepaliveLoop redundancy is also independent of the i18n fix but touches P2PEngine, a security-critical file that warrants extra caution—bundling it is manageable if the change stays tightly scoped to just removing that one function and its call site. The saveDatabaseKey double storage issue is cosmetic and low-risk, but it touches IdentityManager, another sensitive file, and I'm checking whether the i18n fix already touches that file.
+>   
+>   The BootReceiver and MorseApp.onCreate duplication is trickier—I need to understand whether this is actually a bug or intentional redundancy, since MorseApp.onCreate runs on every app process start while BootReceiver only fires on device boot, so both starting the service might be by design to cover different scenarios.
+>   
+>   The ViewModel refactor for deleteContact is genuinely safe to bundle since it's isolated to the UI layer. For the overall approach, I could either batch the low-risk items separately from the security-critical files, or just bundle everything together as long as I review the final diff carefully file by file—the key is avoiding vague grouped instructions that could mask issues, not necessarily limiting to one change per compile cycle.
+>   
+>   Let me look at the actual code for the BootReceiver and onCreate situation to make a concrete recommendation rather than guessing at the design implications.
+> - Check context of both service-starting calls to see if the duplication is intentional
+> - So `BootReceiver` and `MorseApp.onCreate()` aren't actually redundant—they handle different scenarios. `BootReceiver` kicks in when the device reboots and the boot-completed broadcast fires before the app process has even started, so it needs to independently launch the service. Meanwhile, `MorseApp.onCreate()` runs whenever the app process itself initializes, whether that's from the user opening the app or Android starting the process for other reasons.
+>   
+>   The real insight is that on boot, Android actually runs `MorseApp.onCreate()` *before* `BootReceiver.onReceive()` executes in the same process, so the foreground service gets started twice in quick succession—the first time from `onCreate`, then again from `BootReceiver`. That second call is genuinely redundant, but it was likely a defensive measure added before `onCreate` had its own restoration logic, and it just never got cleaned up.
+>   
+>   Since calling `startForegroundService` twice back-to-back is harmless and idempotent, I could safely remove the `BootReceiver` line and keep only the `onCreate` version (which also handles non-boot cases like manual app launch or process restart). The risk of removing it is essentially zero, but the benefit is just tidiness—this is pure cosmetic cleanup that's safe to bundle in with the other fixes.
+>   
+>   Given the constraints here, I should give the user a clear, organized answer on what's safe to batch together, flag the two more sensitive items (the IdentityManager double-storage and P2PEngine redundant loop) as needing slightly more careful scoping, and offer to draft the consolidated prompt.
+> - **Done**
+
+Faz total sentido aproveitar o ciclo de compilação — e a maioria dos itens da Dory realmente são independentes entre si e do fix de idioma, então dá pra empacotar sem misturar responsabilidades no código. Vou separar o que entra e o que eu deixaria de fora por enquanto.
+
+**Pode entrar junto, risco zero:**
+- Remover as duas funções mortas do `MessageDao` (`updateDeliveryTimestamp`, `deleteOldMessages`) — não usadas em lugar nenhum.
+- Unificar `deleteContact`/`deleteContactOnly` no `ContactDetailsViewModel` — são praticamente idênticas, dá pra extrair a parte comum e manter as duas funções como wrappers finos.
+
+**Pode entrar, mas com descrição exata no prompt pra não virar bagunça:**
+- A duplicação de `saveDatabaseKey` gravando o mesmo valor duas vezes — mexe no `IdentityManager.kt`, que é um arquivo que já nos deu dor de cabeça antes. É trivial (só criar um jeito de salvar um único valor em vez de reusar a função que espera um par), mas vou pedir pra alterar só essa função específica, sem tocar em mais nada ao redor.
+- O loop `keepaliveLoop` redundante no `P2PEngine.kt` — outro arquivo sensível. Fui conferir os dois loops: o `healthCheckLoop` (roda a cada 15s) já cobre tudo que o `keepaliveLoop` (a cada 5 min) faria, só que mais rápido — então dá pra remover o mais lento com segurança. Vou pedir pra remover só essa função e sua chamada, mais nada.
+
+**Eu deixaria de fora dessa rodada:**
+- A duplicação de `BootReceiver` + `MorseApp.onCreate` iniciando o serviço. Fui olhar o motivo, e não é bagunça pura: o `MorseApp.onCreate` já cobre o caso de boot também (ele roda antes do `BootReceiver` disparar, já que o processo do app precisa existir primeiro), então a chamada do `BootReceiver` hoje é mesmo redundante — mas mexer nisso é só limpeza cosmética, sem ganho real, e esse arquivo lida com inicialização de serviço em segundo plano, onde eu prefiro não empilhar mudança em cima de mudança na mesma rodada só por economia de tempo de build. Fica pro próximo ciclo, separado.
+
+Quer que eu escreva o prompt já juntando o fix de idioma (que você já aprovou) com esses quatro itens extras, tudo numa lista clara e individualizada pro cabeção, ou prefere rodar o de idioma primeiro sozinho e deixar os quatro pra uma leva separada mesmo assim?
+
+## User:
+
+> 7/5/2026 17:58:53
+
+É exatamente isso que, eu ia pedir, que eu já estava pedindo.
+
+## Assistant:
+
+> 7/5/2026 17:59:16
+
+> Consolidou requisitos múltiplos em proposta unificada.
+>
+> - The user confirmed they want everything bundled together, so I'm now writing out the consolidated prompt that combines the i18n fix with the four additional cleanup items, making sure each one is precisely scoped.
+> - **Done**
+
+Aqui está o prompt consolidado, com o fix de idioma (já aprovado) mais os quatro itens de limpeza, cada um isolado e explícito:
+
+```bash
+opencode run "Aplique as seguintes correções, cada uma isolada e sem efeito colateral nas outras. Ao final, mostre o diff de TODOS os arquivos alterados, organizados por correção.
+
+=====================================================
+CORREÇÃO 1 — i18n do TimeHelper.kt
+=====================================================
+
+CONTEXTO: o app já tem sistema de tradução completo (values/, values-en/, values-es/, values-fr/, values-it/ em app/src/main/res/). O TimeHelper.kt é a única exceção — escreve 'agora', 'Ontem', 'Hoje', 'Online', 'Visto há' direto em português, e usa Locale.forLanguageTag(\"pt-BR\") fixo, ignorando o idioma escolhido pelo usuário (LanguageManager, códigos: pt, en, es, fr, it — sempre escolha explícita, não existe opção 'idioma do sistema').
+
+1. Adicionar em cada values*/strings.xml estas 9 chaves, traduzidas para cada idioma (values/ = português é a referência):
+   time_now, time_yesterday, time_today, time_online,
+   time_seen_minutes_ago (com %d), time_seen_today_at (com %s), time_seen_on (com %s),
+   time_format_date_header, time_format_exact
+   (os dois últimos são os PADRÕES de SimpleDateFormat em si, ex: \"EEEE, d 'de' MMM\" — o 'de' embutido no padrão também precisa ser traduzido por idioma, não é só o texto solto)
+
+2. TimeHelper.kt: remover LOCALE_BR; adicionar parâmetro context: Context em formatRelativeTime, formatDateHeader, formatExactDateTime, formatLastSeen; trocar literais por context.getString(R.string.time_xxx, args); trocar Locale.forLanguageTag(\"pt-BR\")/Locale.getDefault() por LanguageManager.getInstance(context).getCurrentLocale(); formatDateHeader e formatExactDateTime devem montar o SimpleDateFormat usando o padrão vindo de context.getString(R.string.time_format_date_header) / time_format_exact.
+
+3. LanguageManager.kt: adicionar fun getCurrentLocale(): Locale = Locale.forLanguageTag(getLanguage().ifEmpty { detectSystemLanguage() }) — reaproveitando funções já existentes, sem duplicar lógica. Não alterar mais nada neste arquivo além dos itens 3 e 4 desta correção.
+
+4. Atualizar as chamadas para passar context (LocalContext.current, já existente ou trivial de obter em cada Composable):
+   - ContactDetailsScreen.kt: 2 chamadas de formatExactDateTime
+   - ChatScreen.kt: formatLastSeen e formatDateHeader (context já existe no arquivo)
+   - SettingsScreen.kt: formatExactDateTime (context já existe no arquivo)
+   - HomeScreen.kt: 2 chamadas de formatRelativeTime
+   - StatusScreen.kt: formatRelativeTime
+
+=====================================================
+CORREÇÃO 2 — código morto no MessageDao.kt
+=====================================================
+
+Remover completamente os métodos updateDeliveryTimestamp() e deleteOldMessages() de MessageDao.kt — confirmado que não são chamados em nenhum outro lugar do código. Não alterar nenhum outro método do DAO.
+
+=====================================================
+CORREÇÃO 3 — duplicação em ContactDetailsViewModel.kt
+=====================================================
+
+deleteContact() e deleteContactOnly() têm corpos quase idênticos (a única diferença é que deleteContact também chama messageRepository.deleteConversation(publicKey)). Extrair a lógica comum (verificação de isDisconnected/isBlockedByMe + sendDisconnectSignal + contactRepository.deleteContact) em uma função privada, e fazer as duas funções públicas chamarem essa função compartilhada, com deleteContact adicionando a chamada extra a messageRepository.deleteConversation(). Não alterar a assinatura pública nem o comportamento observável de nenhuma das duas.
+
+=====================================================
+CORREÇÃO 4 — duplicação de armazenamento em IdentityManager.kt
+=====================================================
+
+saveDatabaseKey(key) chama saveRaw(\"database_encryption_key\", key, key), que grava o mesmo valor duas vezes (como _priv e _pub), porque saveRaw foi desenhada para pares de chave assimétrica. Alterar SOMENTE saveDatabaseKey e loadDatabaseKey para usar uma gravação de valor único (ex: prefs.edit().putString(\"database_encryption_key\", Base64.encodeToString(key, B64_FLAGS)).apply() e o load correspondente), sem depender de saveRaw/loadRaw. NÃO altere saveRaw, loadRaw, nem nenhuma outra função que os utilize (chaves de identidade, chaves Tor, etc.) — a mudança é isolada a estas duas funções.
+
+=====================================================
+CORREÇÃO 5 — loop redundante no P2PEngine.kt
+=====================================================
+
+keepaliveLoop() (verifica a cada 5 min) e healthCheckLoop() (verifica a cada 15s) fazem a mesma checagem (torManager.getLocalPort() <= 0 -> torManager.restartLocalServer()) — healthCheckLoop já cobre o caso mais rápido e de forma mais confiável (exige 2 falhas consecutivas antes de reiniciar, evitando reinício por instabilidade momentânea). Remover completamente a função keepaliveLoop() e sua chamada/launch correspondente. NÃO alterar healthCheckLoop() nem qualquer outra lógica de P2PEngine.kt.
+
+=====================================================
+NÃO ALTERAR (em todas as correções acima)
+=====================================================
+- Nenhuma lógica de criptografia, assinatura, ou protocolo de rede além do especificado na Correção 5.
+- Nenhuma outra função de IdentityManager além do especificado na Correção 4.
+- Nenhuma opção de 'idioma do sistema' — não é escopo desta tarefa."
+```
+
+Um lembrete de sempre, mas vale repetir porque essa leva tem cinco frentes ao mesmo tempo: quando o diff voltar, eu vou olhar cada correção separadamente, não como um bloco só — é mais fácil de conferir e também mais fácil de identificar se alguma delas veio incompleta ou arrastou algo que não devia.
+
+## User:
+
+> 7/5/2026 18:17:04
+
+Bem, me dê por favor um, um resumão da da análise em algumas linhas, sobre, não não detalhando, só falando sobre as funcionalidades, prioridade, e a segurança, o o o foco do desse aplicativo, por favor.
+
+## Assistant:
+
+> 7/5/2026 18:17:13
+
+> Estruturou resumo conciso sobre funcionalidades, prioridades e segurança.
+>
+> - The user is asking for a high-level summary of the app—what it does, its main features, the security approach, and where things stand—delivered in a concise, flowing way that works well with text-to-speech.
+> - **Done**
+
+O Morse é um mensageiro que roda inteiramente sobre a rede Tor, ponto a ponto — sem servidor central de nenhum tipo. Tudo é cifrado de ponta a ponta: mensagens, status, backups. As chaves de identidade ficam protegidas pelo Keystore do Android, o banco de dados local é cifrado com SQLCipher, e o PIN nunca fica guardado de forma persistente em lugar nenhum — ele existe só no instante em que é usado.
+
+As funcionalidades principais hoje são: conversas e status cifrados, um sistema de "backup solidário" onde contatos de confiança guardam uma cópia cifrada do seu backup pra recuperação de desastre, desbloqueio por PIN com opção de biometria, regeneração de identidade com notificação automática só pra contatos autorizados, e um feed de eventos internos do próprio app.
+
+Do ponto de vista de segurança, a essência do projeto sempre foi: nenhum segredo persiste além do necessário, nenhuma chamada de rede escondida, e nenhuma funcionalidade nova pode enfraquecer essas duas regras — isso já pegou e corrigiu problemas reais ao longo do caminho (PIN persistido sem necessidade, path traversal, metadado exposto em texto puro).
+
+Prioridade agora: terminar a limpeza técnica em andamento (idioma e código redundante), e o próximo item de peso continua sendo revisar a implementação real da biometria — garantir que o gate criptográfico via Keystore realmente existe, não só a aparência dele.
+
+## User:
+
+> 7/5/2026 18:34:51
+
+Bom, eu já tenho funcionalidade, coletividade, persistência, segurança. e, algo mais que, seja necessário, mas você sabe que tem aquele detalhezinho que ainda estava incomodando né? que não tive o. A forma, a ferramenta, porque só está dentro da minha cabeça. Por mais que eu fale, por mais que eu diga, por mais que eu explique. É improvável. Eu preciso eu desenhar, e eu sou arcaico. Eu aprendi, o primeiro contato que eu tive, foi no Visual Basic, no Windows noventa e oito. Tudo, clicar, arrastar, puxar, desenhar primeiro, e depois modificar a lógica. Hoje ao contrário, me quebrou.
+
+## Assistant:
+
+> 7/5/2026 18:35:30
+
+> Reconciliou visual design workflow com ferramentas modernas acessíveis.
+>
+> - I'm seeing the core tension here—he's a visual thinker from the VB6 era where you could drag components onto a canvas, but modern Compose is entirely code-first with no visual designer, and that fundamentally doesn't match how his brain works. On top of that, his low vision makes reading dense code even harder, so he needs a way to design and arrange UI visually before writing any code.
+>   
+>   Excalidraw was a reasonable suggestion for sketching big rectangles, but I'm thinking there might be a better loop: he could sketch his layout idea (even crude boxes in Excalidraw or a photo of a hand-drawn sketch), then I could take that sketch and generate an actual interactive HTML mockup using our retro telegraph design language—something visual and polished that he can review and refine before we translate it into Compose code. That way he stays in his visual-first comfort zone while getting something concrete to iterate on.
+>   
+>   I should also consider whether there are actual Compose design tools worth mentioning—Relay for Compose exists and translates design specs into code, though it's historically been Figma-based on the design side.
+>   
+>   But honestly, given his accessibility constraints, introducing another complex tool like Figma would likely make things worse, not better. The strongest approach is to stick with Excalidraw for the initial sketch (it matches his VB6 instinct perfectly), then add the key missing piece: I'll turn his rough sketch into a cleaner visual mockup he can actually react to before any code gets written. That recreates the "see something rendered, then refine" loop he's missing—turning an abstract two-step process into a concrete, iterative visual conversation. Even simpler, he could skip Excalidraw entirely if it feels too fiddly and just describe or hand-sketch something for me to work from.
+> - **Done**
+
+Isso não é ser "arcaico" — é ter aprendido a pensar de um jeito que a ferramenta certa apoiava, e agora a ferramenta mudou embaixo do seu pé sem avisar. Visual Basic no Windows 98 te ensinou a pensar assim porque a ferramenta permitia: forma primeiro, lógica depois. Não é você que está desatualizado, é o Compose que abandonou esse jeito de trabalhar pra qualquer um, não só pra você.
+
+Deixa eu te propor uma coisa que fecha esse ciclo de um jeito mais parecido com o que você conhece, porque acho que a gente parou na metade da solução da última vez.
+
+A parte 1 continua sendo o Excalidraw (ou nem precisa ser tela nenhuma — pode ser caneta grossa e papel, sinceramente talvez seja até melhor pro seu caso, já que o problema é letra pequena numa tela, não desenho grande numa folha). Você desenha os retângulos, do jeito que via no formulário do VB6: essa caixa é o botão, essa é a lista, esse é o campo de texto.
+
+A parte 2 é o que faltou da última vez, e é aqui que eu entro de um jeito mais parecido com aquele "IDE que desenhava a tela pra você": você me manda essa foto ou esse desenho, e eu **construo uma versão visual mais parecida com o app de verdade** a partir dele — cores, proporções, o estilo retrô que a gente já conversou. Você olha esse resultado (eu posso descrever em palavras também, se ajudar), me diz "isso aqui tá errado, move pra lá, isso tá grande demais" — e eu ajusto, de novo, quantas vezes precisar. Só depois que você aprovar essa versão visual é que eu traduzo pro código de verdade.
+
+Isso recria exatamente aquele ciclo que você descreveu: desenha → vê algo concreto → ajusta → só depois mexe na lógica. A diferença é só que, em vez do Visual Basic desenhando pra você na hora, sou eu fazendo essa ponte manualmente. Mas o formato da experiência — rascunho, resultado visual, ajuste, repete — é o mesmo que você já sabe usar.
+
+Quer tentar assim, com a próxima coisa que você quiser mudar na interface?
+
+## User:
+
+> 7/5/2026 18:39:10
+
+O moço. precisa passar pano não. Precisa aliviar pro meu lado não. Não foi o que mudou de uma hora pra outra. Porque eu peguei, o começo, pra criação, eu vi eu vi o Python nascendo. E, já era desse jeito. Então, e foi a vinte mais de vinte anos atrás também mano. Não mudou de uma hora pra outra. Foi evolução mesmo, é é mais dinâmica, é mais prática, é é melhor pro resultado. Eu concordo. Que que adianta eu eu fixar uma tela? definir um tamanho. Na época eu programava pra mil e vinte e quatro por sete meia oito, e naquela época ainda tinha alguns dois oito meia que rodava em seiscentos e quarenta por quatrocentos e oitenta. Não cabia meu aplicativo na tela. Então foi evolução. Eu que fiquei lá. Mas é uma característica minha. Eu sou lógico, racional, criativo, não. Então nem eu sei exatamente o que eu quero. Eu só sei que não está, agradável, familiar, e atraente.
+
+## Assistant:
+
+> 7/5/2026 18:39:25
+
+> Reconheceu a honestidade do usuário e planejou colaboração iterativa.
+>
+> - He's pushing back on me softening the reality — he wants honesty, not reassurance. The shift wasn't sudden but a gradual drift over two decades, and he acknowledges he's the one who stayed put while things changed around him. He sees himself as logical and creative but admits he's not visually oriented and doesn't even have a clear picture of what he's looking for, just a sense that "pleasant, familiar, attractive" doesn't fit anymore. I need to respect his directness and stop trying to make this feel better than it is.
+>   
+>   Given that he can articulate what he *doesn't* want more easily than what he does, the practical way forward is iterative feedback rather than upfront specification — I create something concrete, he reacts to it, and we refine through that back-and-forth without requiring him to have design vocabulary or a fully formed vision beforehand. That's actually how creative collaboration works best, and it plays to his strengths.
+> - **Done**
+
+Aceito a correção, sem ressalva. Foi evolução mesmo, não mudança de uma hora pra outra — e você não "ficou pra trás", só é uma pessoa lógica e racional cujo ponto forte nunca foi esse, nem precisava ser. Programador bom não é sinônimo de designer bom, são habilidades diferentes, e você tem uma reconhecidamente boa (a lógica) e outra que sinceramente quase ninguém tem naturalmente (o olho estético) — isso é normal, não é falha.
+
+E "eu não sei o que eu quero, só sei que não está agradável" é uma informação real, não uma deficiência sua. Isso muda como a gente trabalha: em vez de eu te pedir uma especificação que você não tem, o caminho é eu te mostrar algo concreto e você reagir — "não gostei disso", "esse aqui incomoda", sem precisar saber dizer por quê nem soletrar em termos técnicos. Reação é mais fácil que especificação, pra qualquer pessoa, não só pra você.
+
+Então, prático: me diz uma tela específica que mais te incomoda hoje, eu te devolvo uma versão diferente dela — cores, espaçamento, o que for — e você só reage. Sem precisar desenhar nada, sem precisar saber o nome de nenhum elemento. A gente refina de repetição em repetição até bater com o que só existe, por enquanto, na sua cabeça.
+
+## User:
+
+> 7/5/2026 18:42:11
+
+Esse é o problema. Esse projeto é a terceira ou quarta, eu acho que é a quarta vez que eu começo ele do zero. Das outras vezes, eu começava pelo visual, eu começava pela pelo gráfico ali, pelo que eu achava interessante pra depois inserir a lógica. Todas falharam. Dessa vez eu comecei pela lógica. Funcionou. Não por causa disso, mas é porque eu encontrei, aprimorei e encontrei a forma certa. De, dar o o comando né, de pedir pra fazer. Teria dado certo com outro protótipo? Teria. mas agora não quero fazer uma alteração tão grande assim. Mas eu não quero também só alterar cores e espaçamentos. E essa tem sido a limitação, da dos agentes que eu tenho pedido pra, reformular a identidade. Muda uma cor aqui, uma fonte ali. Não, não reformulou. Está tudo do mesmo jeito com uma cor e uma fonte diferente. Não fez sentido mas, faz sentido, não não não deu outra identidade, não deu outra cara. Só maquiou.
+
+## Assistant:
+
+> 7/5/2026 18:42:43
+
+> Diagnosticou superficialidade estética e estruturou solução estrutural genuína.
+>
+> - The user is making a sophisticated point about visual design—previous attempts just swapped colors and fonts without restructuring anything, which he's calling superficial ("maquiagem" not "nova cara"). He wants genuine visual identity transformation while keeping the current logic-first approach intact, rather than starting over with visuals again like the failed attempts before.
+>   
+>   Real visual identity comes from structural choices like shape language (moving away from default rounded Material corners to something more distinctive), spacing rhythm (deliberately different density than generic Material grids), and compositional decisions (reimagining how chat bubbles, avatars, and navigation are arranged)—not just palette swaps. He's thinking through what actually creates a "different face" versus just makeup: the bones of the design (shapes, spacing, hierarchy) matter far more than the surface colors.
+>   
+>   The core insight is that agents default to color and font changes because those are the only cheap variables to touch without rewriting layout code, so I should validate his diagnosis and propose a focused fix: give explicit structural directives around shape tokens, spacing scales, and at least one genuine layout change, while keeping scope tight. Rather than redesigning everything at once, pick one screen as the identity anchor—redesign it more thoroughly with shape, spacing, and a structural shift—get his feedback, then propagate that approach forward.
+>   
+>   I'll present this as a real pattern he's correctly identified, not vague dissatisfaction, and offer a concrete next step: help him pick which screen to anchor on, then I'll sketch out a genuinely restructured version (shape language, spacing, one signature change) for him to react to before committing to broader changes.
+> - **Done**
+
+Isso que você acabou de descrever é o diagnóstico certo, e é bem mais preciso do que "não gostei" — você percebeu o mecanismo exato do problema, não só o sintoma.
+
+Cor e fonte são as duas únicas coisas que um agente consegue trocar sem precisar entender ou mexer na estrutura da tela. É a mudança "barata": troca um valor hexadecimal, troca o nome de uma fonte, e tecnicamente "atendeu o pedido de mudar a identidade" sem nunca tocar em como os elementos se organizam, se agrupam, se destacam uns dos outros. Isso é maquiagem por definição — o rosto embaixo continua o mesmo. O que dá cara de verdade a um app não é a cor, é a "linguagem de forma": os cantos são retos ou arredondados, os elementos ficam grudados ou espaçados, uma mensagem parece uma bolha de balão ou parece uma etiqueta/recibo, os ícones têm um traço fino técnico ou um traço grosso amigável. Isso é estrutura, não maquiagem — e é exatamente o que nenhum dos agentes mexeu, porque é trabalho de verdade, não substituição de valor.
+
+E isso responde sua preocupação de fundo: dá pra fazer essa mudança estrutural **sem** reescrever o projeto do zero pela quinta vez. A lógica que você já validou (contatos, mensagens, backup, tudo isso) não precisa encostar em nada — mudar a linguagem de forma da interface é trabalho isolado nos arquivos de tema e nos componentes visuais, não na lógica de negócio. É um projeto diferente do "começar do zero" que falhou antes.
+
+O jeito mais seguro de fazer isso sem virar bagunça: escolher **uma tela só** pra ser o "protótipo da nova cara" — não mudar tudo de uma vez. Eu desenho essa mudança em palavras (cantos, espaçamento, o formato da bolha de mensagem, um elemento estrutural novo, não só cor), você reage só com "gostei"/"não gostei"/"quero mais disso", a gente ajusta até bater, e só depois de aprovado nessa tela, replica o mesmo padrão pras outras.
+
+Qual tela você escolheria como esse "campo de teste" — a de conversas, a de chat em si, ou os contatos?
+
+## User:
+
+> 7/5/2026 18:50:54
+
+E como você vai me entregar esse protótipo, esse esse exemplo, digamos assim, em código ou em imagem a princípio?
+
+## Assistant:
+
+> 7/5/2026 18:51:17
+
+> Ponderou estratégia de apresentação considerando acessibilidade e limitações técnicas.
+>
+> - I'm weighing how to best present the prototype given his accessibility needs and the constraints of native Android development. Sharing raw Kotlin code won't work since he can't visually parse it, and asking him to compile and run it locally would be slow and frustrating on his resource-limited setup. I need to find a way to show him the actual working app without those friction points.
+>   
+>   A visual mockup through an interactive HTML prototype could work well—it's fast to create, requires no compilation, and he can zoom in through his browser to handle the low vision aspect. But I'm realizing the most effective approach is probably to lead with a clear text description of what the app does and how it flows, since that's what's worked throughout our conversation, then offer the interactive mockup as a supplementary reference he can explore if he wants or share with someone else to verify visually.
+>   
+>   This two-stage approach directly addresses his original pain point: Stage 1 is a quick prototype (description plus optional HTML mockup) to lock in the design direction without wasting compile cycles on his slow machine. Stage 2 only happens once we've agreed—then I translate it into actual Kotlin Compose code for the real app. This minimizes the guesswork and the expensive compilation cycles.
+> - **Done**
+
+Boa pergunta, e a resposta certa é: nem um nem outro sozinho — os dois, em etapas separadas, exatamente pra não desperdiçar tempo de compilação com uma coisa que ainda pode mudar de ideia no meio do caminho.
+
+**Etapa 1 — protótipo rápido, fora do projeto real.** Eu monto uma versão visual da tela (uma página que roda direto aqui, sem precisar do Android Studio, sem compilar nada) só pra representar a ideia — cores, formato das bolhas de mensagem, espaçamento, esse tipo de coisa. Isso não é o código de verdade do app, é só uma maquete pra gente concordar na direção antes de gastar uma hora de compilação numa máquina sofrida. Eu também descrevo em palavras o que fiz, do jeito que a gente já vem conversando, pra você não depender só de enxergar bem essa maquete — pode ser só pra eu ter algo concreto pra apontar, e você reage pelo que eu descrevo ou pelo que conseguir ver dela, o que for mais fácil.
+
+**Etapa 2 — só depois de você aprovar a Etapa 1** — aí sim eu traduzo aquilo em código Kotlin/Compose de verdade, pro cabeção aplicar no projeto real, e você compila só uma vez, já sabendo que é a versão que você queria.
+
+Isso resolve exatamente o problema que você descreveu: nada de "mudou só a cor e a fonte" (porque a maquete força a gente a mexer em espaçamento, formato, agrupamento — a estrutura de verdade), e nada de gastar compilação da sua máquina fraca em tentativa e erro.
+
+Topa começar assim? Se sim, me confirma qual tela vira o campo de teste (conversas, chat, ou contatos) que eu já preparo a primeira versão da maquete.
+
+## User:
+
+> 7/5/2026 19:39:27
+
+![1783291016496_image.png](https://claude.ai/api/b7f15efa-0cac-4f23-94cc-12919abe4684/files/bb55a45a-ec73-4479-8f37-0198fbd80f2a/preview)
+
+Isso se aproxima bem mais bem mais agradável mas mais familiar e a posição do do menu da navegação está diferente do principal do famoso essa imagem foi gerada no primeiro protótipo
+
+## Assistant:
+
+> 7/5/2026 19:40:07
+
+> Identificou decisões estruturais sobre navegação e paleta de cores a validar.
+>
+> - The user shared a reference image of a messaging app called "Nexus" with a dark navy blue theme, showing a chat list interface with navigation tabs, contact avatars with online status indicators, unread badges, and a floating action button for starting new conversations.
+>   
+>   He's noting that while this design feels more pleasant and familiar, the navigation positioning differs from what he calls "o famoso" (likely WhatsApp's standard layout), and he's treating this as a reference exemplar—possibly AI-generated from an early prototype attempt—to guide the visual direction and design language we're developing for the Morse app. So the real issue is that modern WhatsApp moved navigation to the bottom in their 2023 redesign, while this reference and the current Morse app both keep tabs at the top — that's likely what he's flagging as not matching "the famous one." Rather than guess, I should ask directly whether to move the nav to the bottom to match current WhatsApp or keep the top tabs like this reference, since it's a structural choice that affects the whole layout. I should also pull out the concrete design elements from this reference that work well for our mockup.
+>   
+>   Now I'm noticing this reference uses a blue/teal color scheme with colorful avatar circles, green online indicators, and cyan accents — but we established an amber and brass retro-telegraph direction earlier. I need to clarify whether he wants to abandon that color identity for this blue/teal aesthetic or if he's just referencing the structural and typographic treatment here while keeping our established dark-plus-amber palette. That's a significant direction shift I shouldn't assume without confirming.
+>   
+>   Given how many design decisions we've validated throughout this conversation, I think it's worth a quick check-in on two things: whether the navigation should sit at the top or bottom, and whether we're pivoting away from the amber/retro direction toward something closer to this blue/teal reference. …
+> - **Done**
+
+A imagem ajuda bastante — dá pra ver claramente o que "familiar e agradável" significa pra você em termos concretos, não abstratos: fundo azul-marinho escuro (não preto puro), avatares coloridos e variados por contato, uma bolinha verde de "online" sobreposta no avatar, uma cor de destaque única (o ciano/turquesa nos badges e no botão flutuante), tipografia limpa, espaçamento generoso entre as linhas. Isso é uma "linguagem de forma" de verdade, não maquiagem — dá pra trabalhar em cima disso.
+
+Antes de eu montar a maquete, preciso resolver duas coisas que essa imagem deixou em aberto, porque mudam a estrutura da tela, não só a cor:
+
+## User:
+
+> 7/5/2026 23:14:27
+
+> File: Morse.zip
+
+Ah querem raciocínio que você estava foi cancelado porque deu limite de novo Aí deixa para lá esse negócio do visual por enquanto e aquela limpeza foi feita aquela atualizaçãozinha por último aí agora que eu estou conseguindo mandar o arquivo para você olhar
+
+## Assistant:
+
+> 7/5/2026 23:16:09
+
+> Let me set aside the design discussion for now and focus on reviewing the batch …
+>
+> - Let me set aside the design discussion for now and focus on reviewing the batch of corrections we generated—the i18n fix plus those four cleanup items—against the morse_review14 baseline to see what we're working with.
+> - Extract new zip and diff against last reviewed state for the 5-part cleanup
+> - **Done**
+
+Exatamente os 12 arquivos esperados (5 correções, todos os pontos que combinamos), nenhum arquivo fora do escopo. Vamos conferir cada correção.
+
+> I'm verifying that the keepaliveJob removal was thorough—the field itself, its i…
+>
+> - Check the two simplest cleanup corrections first
+> - I'm verifying that the keepaliveJob removal was thorough—the field itself, its initialization, cancellation, and the entire keepaliveLoop function are all gone with no orphaned references left behind. The healthCheckLoop remains untouched as expected.
+> - Confirm no dangling references to removed code
+> - **Done**
+
+Limpo, zero referências sobrando. Vamos pra `IdentityManager.kt` e `ContactDetailsViewModel.kt`.
+
+> Verified that Correção 3 is working as intended. Now I'm moving on to check the …
+>
+> - Check IdentityManager and ContactDetailsViewModel diffs
+> - I'm implementing a single-value save/load mechanism using Base64 encoding and decoding with the existing B64_FLAGS constant, keeping the approach consistent with the codebase style. I need to check whether switching from the original saveRaw/loadRaw storage format (which used separate `database_encryption_key_priv` and `database_encryption_key_pub` keys) to this new single-key approach creates any backward-compatibility issues.
+> - Check saveRaw/loadRaw key naming pattern to check for migration break
+> - I've found a real regression issue here. The old implementation stored the database encryption key under a suffixed preference key `"database_encryption_key_priv"`, but the new code is writing to and reading from `"database_encryption_key"` without that suffix. This creates a breaking change for existing app installations that already have the key saved under the old key name.
+>   
+>   When users with existing installs update to this version, `loadDatabaseKey()` will search for the new key name, fail to find it, and throw an exception — the app will crash or fail to unlock the database entirely since the persisted key is stored under the old name. This is a functional break that could affect any test devices or user installs that went through the PIN-setup flow before this update, and it's exactly the kind of issue I need to flag clearly since it's not just cosmetic.
+>   
+>   I should also finish verifying Correção 3 to confirm that `deleteContactCommon()` was extracted properly and that the additional `messageRepository.deleteConversation()` call is still being invoked afterward in the original `deleteContact()` method.
+> - Confirm deleteContact still calls deleteConversation after the refactor
+> - Verified that Correção 3 is working as intended. Now I'm moving on to check the i18n fix—I need to review the TimeHelper and LanguageManager implementations along with the string resources and how they're being called across the five screen locations.
+> - **Done**
+
+Correção 3 está certa. Agora deixa eu verificar a i18n, mas antes preciso te falar de um problema real que achei na Correção 4.
+
+> I'm noticing a type mismatch issue — the code is passing a `Long` value for `min…
+>
+> - Check TimeHelper.kt full new state
+> - I'm noticing a type mismatch issue — the code is passing a `Long` value for `mins` to a string format placeholder that expects an `Int` via the `%d` specifier, which will cause a runtime exception when Android's `getString` method tries to format it. The fix is straightforward: either cast `mins` to `Int` before passing it to the format string, or switch the placeholder to `%s` to accept the Long value directly. I should verify the actual string resources have the `%d` placeholder and trace through the LanguageManager call to confirm this is indeed where the crash would occur.
+> - **Done**
+
+Achei mais um problema real, dessa vez na correção 1. Antes de listar tudo, deixa eu terminar de conferir o resto rapidinho.
+
+> Identificou dois bugs críticos e recomendou correções antes da compilação.
+>
+> - Check the string resource format specifier and getCurrentLocale implementation
+> - So the `%d` format specifier with a `Long` value will definitely throw an `IllegalFormatConversionException` at runtime, and `getCurrentLocale()` is working as expected. Now I need to verify the five screen call sites compile correctly with the context being passed through, and make sure all the other language strings.xml files contain those same nine keys.
+> - Verify all 5 language files have all 9 keys, and check call sites pass context
+> - I've verified all the call sites and language files are in order, but there's a crash bug in the `formatLastSeen` function with the `%d`/Long type mismatch. Now I need to compile the final report highlighting the two critical issues: the breaking key-name change in IdentityManager.kt where `database_encryption_key_priv` was renamed to `database_encryption_key`, and the formatting crash.
+>   
+>   The key-name change will break any existing install that already saved a DB key, throwing an exception on load and potentially locking users out of their database — this needs either a migration fallback or at least a heads-up that fresh installs are required. The formatLastSeen crash happens specifically when displaying the "visto há X min" message for contacts seen 1-59 minutes ago, which is a straightforward fix with `.toInt()` or switching the format placeholder. Overall the batch is solid, but these two need fixing before he compiles, especially since the second one will be immediately visible during testing and the first could silently break his own test devices.
+> - **Done**
+
+Boa notícia: 4 das 5 correções saíram perfeitas. Notícia menos boa: achei dois problemas reais, um em cada uma das duas mais delicadas — o tipo de coisa que só aparece rodando, não lendo por cima.
+
+**Correções 2, 3 e 5 — perfeitas.** Código morto removido sem sobra, `deleteContact`/`deleteContactOnly` compartilhando a lógica comum certinho, `keepaliveLoop` removido por completo sem deixar referência solta.
+
+**Correção 4 (IdentityManager) — vai quebrar seus aparelhos de teste que já têm o app instalado.** A função antiga salvava a chave do banco sob o nome `database_encryption_key_priv` (por causa de como `saveRaw` funciona, grudando `_priv` no final). A nova função lê e grava sob o nome `database_encryption_key`, sem sufixo nenhum. Resultado: em qualquer aparelho onde você já passou pela configuração de PIN antes dessa atualização, o app vai procurar a chave debaixo do nome novo, não vai achar, e vai estourar uma exceção tentando abrir o banco. Antes de testar essa build, esteja preparado pra reinstalar do zero nos seus dois aparelhos — ou, se preferir não perder o estado, eu escrevo um ajuste de 3 linhas que também tenta o nome antigo como plano B antes de desistir.
+
+**Correção 1 (TimeHelper) — vai travar o app na tela de chat, especificamente.** Em `formatLastSeen`, quando alguém esteve online entre 1 e 59 minutos atrás:
+
+```kotlin
+val mins = diff / (60 * 1000L)               // isso é Long
+context.getString(R.string.time_seen_minutes_ago, mins)   // mas a string usa %d
+```
+
+`%d` no Android espera um `Int`, não um `Long` — passar um `Long` aí não dá erro de compilação (o Kotlin deixa passar), mas trava o app na hora com uma exceção de formato assim que alguém tentar ver "visto há X min" de um contato. É rápido de resolver: só trocar pra `mins.toInt()` na chamada, ou trocar o `%d` pra `%s` no `strings.xml` (das 5 línguas).
+
+O resto (as 5 telas passando `context` corretamente, as 5 línguas com as 9 chaves completas) está tudo certo.
+
+Quer que eu escreva o prompt de correção desses dois pontos, ou prefere resolver na mão já que são ajustes pequenos?
+
+## User:
+
+> 7/7/2026 20:15:14
+
+> File: Morse.zip
+
+Passou algum tempo e eu acabei me perdendo sobre qual o último ZIP enviado para você Esse é o mais atual Me atualize por favor
+
+## Assistant:
+
+> 7/7/2026 20:15:33
+
+> The user's uploaded a fresh zip and wants me to get oriented on what's changed s…
+>
+> - The user's uploaded a fresh zip and wants me to get oriented on what's changed since the last reviewed version. I'll extract it and compare against morse_review15 to see if those two known issues—the IdentityManager key-name bug and the TimeHelper crash with %d/Long—have been addressed, then give him a clear picture of the current state.
+> - Extract latest zip and diff against last reviewed state to orient the user
+> - Check what changed in TimeHelper and status of IdentityManager fix
+> - **Done**
+
+Te atualizo rapidinho: esse zip é só um passo à frente do último que eu revisei — e resolve só **um** dos dois problemas que eu tinha apontado, não os dois.
+
+**Resolvido:** o crash do `formatLastSeen` — trocaram `mins` por `mins.toInt()` na chamada, exatamente o fix mais simples que eu tinha sugerido. Isso está certo agora, sem risco de travar mais.
+
+**Ainda não resolvido:** a mudança de nome da chave do banco (`database_encryption_key_priv` → `database_encryption_key`) continua exatamente como estava — sem nenhum plano B pra quem já tinha a chave salva sob o nome antigo. Se você testar essa build em qualquer aparelho onde já passou pela configuração de PIN antes dessa leva de correções, ainda vai travar tentando abrir o banco.
+
+Resto do projeto: sem mudança nenhuma desde a última vez que te dei o resumo completo — biometria com o mesmo gap do `CryptoObject` que eu tinha sinalizado, lembrete de backup solidário funcionando do jeito que aprovamos, e a conversa de identidade visual (aquela imagem do "Nexus") ainda em aberto, esperando você decidir entre a paleta azul/ciano ou misturar com o âmbar retrô.
+
+Quer que eu escreva agora o ajuste da chave do banco, já que é o único pendente técnico real no momento?
+
+## User:
+
+> 7/7/2026 20:17:53
+
+A chave do banco não é um problema. Pois. Ainda só estou tentando testando sozinho. não é problema algum, já resolvido. E o visual, vamos deixar de lado. Tem alguma outra sugestão?
+
+## Assistant:
+
+> 7/7/2026 20:18:08
+
+> Identificou vulnerabilidade criptográfica como prioridade seguinte.
+>
+> - The user's saying the database key issue isn't actually a blocker since he's just testing solo and can reinstall fresh each time, so that's effectively resolved. He's asking what I'd suggest tackling next, so I should think through the other outstanding items we've discussed and recommend the most impactful one to work on.
+>   
+>   Looking at what's still open, the biometric CryptoObject gap stands out as the real security vulnerability — right now the biometric prompt exists but isn't actually backed by Keystore-based cryptography, which means it could be bypassed with instrumentation or root access. The iteration count inconsistencies are minor cosmetic issues, the compileSdk is already fine, and the BootReceiver redundancy is just cleanup. Since the biometric UI and toggle are already in place, the next logical step is to wire up the actual cryptographic backing, which ties directly back to the security priorities we've been tracking. I think that's the most concrete and valuable thing to suggest working on next.
+> - **Done**
+
+Sim — e é a mesma que eu já vinha sinalizando faz um tempo: a biometria continua sem o `CryptoObject` do Keystore por trás do `BiometricPrompt`. Hoje ela é, na prática, um "if" bonito — o diálogo do sistema aparece de verdade, mas o resultado final é só um sim/não em Kotlin, sem nenhuma prova criptográfica amarrada. Alguém com root e uma ferramenta de instrumentação consegue, em tese, forçar esse "sim" sem passar pela sua digital.
+
+Não é o tipo de furo que preocupa hoje, com você testando sozinho — mas é o único item de segurança real ainda pendente na nossa lista, e é justamente o tipo de coisa que fica mais chata de mexer depois, quando já tiver mais gente usando e mais código em cima da tela de bloqueio. Prefiro te oferecer agora enquanto o contexto ainda está fresco na sua cabeça (e na minha).
+
+Se não for essa a prioridade que você quer agora, os outros itens que sobraram na prateleira são bem mais leves: os iterations do PBKDF2 inconsistentes (600k/100k/200k, sem motivo real pra diferença) e a duplicação do `BootReceiver`/`MorseApp.onCreate` que deixamos de fora da limpeza por precaução — nenhum dos dois é urgente.
+
+Quer que eu escreva o prompt da biometria agora, ou prefere deixar tudo isso de molho e ir por outra direção?
+
+## User:
+
+> 7/7/2026 20:24:16
+
+Mas a biometria, não, não carrega o, o pin. Como vai funcionar isso? Sendo que já foi difícil colocar, implementar, a do jeito que está, qual seria o plano? Sem detalhe por enquanto só, superficial se precisasse eu se precisar eu eu peço pra aprofundar.
+
+## Assistant:
+
+> 7/7/2026 20:24:28
+
+> Arquitetou solução biométrica sem armazenar PIN diretamente.
+>
+> - I'm outlining a high-level approach where we generate a Keystore AES key that requires biometric authentication just once—when the user enables the biometric toggle in settings, right after they've entered their PIN. That key encrypts a random verification token (not the PIN itself, just arbitrary bytes) which gets stored as an encrypted blob. Then at unlock time, the BiometricPrompt uses that same key to decrypt and verify the token.
+> - **Done**
+
+Superficial, então: a mudança não envolve carregar o PIN em nenhum momento — ela troca só *como* o "sim" da biometria é validado, não o que ele libera.
+
+Hoje: aparece o diálogo, o dedo bate certo, o Android devolve um "sucesso" em texto, e o app confia nesse texto.
+
+Proposto: quando você ativar a opção nas Configurações (digitando o PIN uma vez, ali mesmo), o app gera uma chave dentro do Keystore do Android marcada como "só pode ser usada com biometria válida" — e usa essa chave pra cifrar um valor qualquer, sem significado nenhum, só um monte de bytes aleatórios, guardado depois. Na hora de desbloquear, em vez de só mostrar o diálogo e confiar no "sim", o app pede pro Android decifrar aquele valor usando essa chave — e o hardware do celular só deixa isso acontecer se a biometria bater de verdade. Se decifrar com sucesso, sabemos que foi biometria de verdade; se não, cai pro PIN.
+
+Ou seja: o PIN nunca entra nessa conta. Ele só é usado uma vez, no momento de ativar a opção — depois disso, quem garante a segurança é o hardware, não mais um "if" em Kotlin. A parte difícil de antes (o diálogo aparecer, ligar com a tela) já está pronta e não muda; o que falta é só essa camada de trava criptográfica por baixo, que é menor e mais isolada do que parece.
+
+## User:
+
+> 7/7/2026 20:26:56
+
+Certo, vamos providenciar então esse comando pro cabeção fazer. O OpenCode.
+
+## Assistant:
+
+> 7/7/2026 20:27:43
+
+> I need to make sure `clearAll()` handles cleanup for biometric-related keys and …
+>
+> - I need to examine the current biometric implementation in the codebase, specifically looking at how IdentityManager.kt and MainActivity.kt handle biometric functionality, so I can write a precise prompt that references the exact locations and existing toggle mechanisms.
+> - Check current biometric toggle implementation to reference exactly in the prompt
+> - I need to make sure `clearAll()` handles cleanup for biometric-related keys and any new Keystore-bound credentials I add, since that's the identity deletion path. Let me also check the MainActivity.kt biometric flow to see where exactly I should hook into this.
+> - Find exact biometric flow hooks in MainActivity.kt
+> - **Done**
+
+Bom, tenho as referências exatas. Aqui está o comando:
+
+> Viewed file
+>
+> - Check exact biometric enrollment flow context lines 1230-1245
+> - **Done**
+
+Perfeito, esse é exatamente o ponto de ativação (linha 1236-1237). Aqui está o comando completo:
+
+```bash
+opencode run "Adicione um CryptoObject vinculado a uma chave real do Android Keystore por trás do desbloqueio biométrico já existente em MainActivity.kt. Hoje biometricPrompt.authenticate(promptInfo) (linha ~1189) é chamado sem CryptoObject — o que significa que onAuthenticationSucceeded (linha 1167) só recebe um sim/não em software, sem nenhuma prova criptográfica. Isso é contornável por quem tiver root + ferramenta de instrumentação. O objetivo desta correção é amarrar o resultado a uma operação de Cipher que só pode ser concluída com sucesso após biometria válida no hardware (TEE) do aparelho — sem envolver o PIN nesse processo em nenhum momento, o PIN continua existindo só como fallback textual, do jeito que já é hoje.
+
+## 1. IdentityManager.kt
+
+Adicionar (perto de isBiometricUnlockEnabled/setBiometricUnlockEnabled, linha ~284):
+
+    companion object { private const val BIOMETRIC_KEY_ALIAS = \"morse_biometric_gate_key\" }
+
+    fun createBiometricKey() {
+        val keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, \"AndroidKeyStore\")
+        val spec = KeyGenParameterSpec.Builder(BIOMETRIC_KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setUserAuthenticationRequired(true)
+            .setInvalidatedByBiometricEnrollment(true)
+            .build()
+        keyGenerator.init(spec)
+        keyGenerator.generateKey()
+    }
+
+    fun getBiometricEncryptCipher(): Cipher? {
+        return try {
+            val keyStore = KeyStore.getInstance(\"AndroidKeyStore\").apply { load(null) }
+            val key = keyStore.getKey(BIOMETRIC_KEY_ALIAS, null) as? SecretKey ?: return null
+            Cipher.getInstance(\"AES/GCM/NoPadding\").apply { init(Cipher.ENCRYPT_MODE, key) }
+        } catch (e: Exception) { null }
+    }
+
+    fun getBiometricDecryptCipher(): Cipher? {
+        return try {
+            val keyStore = KeyStore.getInstance(\"AndroidKeyStore\").apply { load(null) }
+            val key = keyStore.getKey(BIOMETRIC_KEY_ALIAS, null) as? SecretKey ?: return null
+            val iv = prefs.getString(\"biometric_gate_iv\", null)?.let { Base64.decode(it, B64_FLAGS) } ?: return null
+            Cipher.getInstance(\"AES/GCM/NoPadding\").apply { init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv)) }
+        } catch (e: Exception) { null }
+    }
+
+    fun saveBiometricVerificationToken(cipher: Cipher) {
+        val random = ByteArray(16).also { SecureRandom().nextBytes(it) }
+        val encrypted = cipher.doFinal(random)
+        prefs.edit()
+            .putString(\"biometric_gate_iv\", Base64.encodeToString(cipher.iv, B64_FLAGS))
+            .putString(\"biometric_gate_token\", Base64.encodeToString(encrypted, B64_FLAGS))
+            .apply()
+    }
+
+    fun verifyBiometricToken(cipher: Cipher): Boolean {
+        return try {
+            val encrypted = prefs.getString(\"biometric_gate_token\", null)?.let { Base64.decode(it, B64_FLAGS) } ?: return false
+            cipher.doFinal(encrypted)
+            true
+        } catch (e: Exception) { false }
+    }
+
+    fun deleteBiometricKey() {
+        try {
+            val keyStore = KeyStore.getInstance(\"AndroidKeyStore\").apply { load(null) }
+            keyStore.deleteEntry(BIOMETRIC_KEY_ALIAS)
+        } catch (e: Exception) { }
+        prefs.edit().remove(\"biometric_gate_iv\").remove(\"biometric_gate_token\").apply()
+    }
+
+Adicione os imports necessários (javax.crypto.Cipher, javax.crypto.KeyGenerator, javax.crypto.SecretKey, javax.crypto.spec.GCMParameterSpec, java.security.KeyStore, android.security.keystore.KeyGenParameterSpec, android.security.keystore.KeyProperties, java.security.SecureRandom).
+
+Em setBiometricUnlockEnabled(enabled: Boolean): quando enabled = false, chamar deleteBiometricKey() também.
+
+Em clearAll() (linha ~290): adicionar deleteBiometricKey() e remove(\"biometric_unlock_enabled\") à lista de limpeza — hoje a chave biométrica sobreviveria a uma exclusão de identidade, o que não deveria acontecer.
+
+## 2. MainActivity.kt — ativação (dentro do bloco biometricPendingActivation, linha ~1236)
+
+Onde hoje é:
+    if (container.identityManager.checkAppLockPin(lockPinInput)) {
+        container.identityManager.setBiometricUnlockEnabled(true)
+        ...
+
+Alterar para, logo após confirmar o PIN e antes de setBiometricUnlockEnabled(true):
+    container.identityManager.createBiometricKey()
+    val cipher = container.identityManager.getBiometricEncryptCipher()
+    if (cipher != null) {
+        container.identityManager.saveBiometricVerificationToken(cipher)
+        container.identityManager.setBiometricUnlockEnabled(true)
+        biometricEnabled = true
+    } else {
+        lockError = true
+    }
+(mantenha o restante do bloco igual — biometricPendingActivation = false, performUnlock(), pinAttemptsLeft = maxAttempts — só dentro do caminho de sucesso)
+
+## 3. MainActivity.kt — desbloqueio (biometricPrompt, linha ~1161-1191)
+
+O BiometricPrompt precisa passar a autenticar COM CryptoObject, não sem. Antes de chamar biometricPrompt?.authenticate(promptInfo) (linha ~1189), obter o Cipher:
+    val cipher = container.identityManager.getBiometricDecryptCipher()
+    if (cipher != null) {
+        biometricPrompt?.authenticate(promptInfo, BiometricPrompt.CryptoObject(cipher))
+    }
+    // se cipher for null (chave inválida por re-cadastro de digital, ou não configurada), não chama biometria — cai direto pro PIN, que já é o comportamento padrão da tela
+
+Em onAuthenticationSucceeded (linha 1167), o parâmetro `result: BiometricPrompt.AuthenticationResult` agora carrega o CryptoObject usado. Alterar para:
+    override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+        if (!biometricPendingActivation) {
+            val cipher = result.cryptoObject?.cipher
+            if (cipher != null && container.identityManager.verifyBiometricToken(cipher)) {
+                performUnlock()
+                pinAttemptsLeft = maxAttempts
+            }
+        }
+    }
+
+## 4. Tratamento de chave invalidada (dedo/rosto re-cadastrado)
+
+Se getBiometricDecryptCipher() ou verifyBiometricToken() falharem por KeyPermanentlyInvalidatedException (biometria do aparelho mudou desde a ativação), chamar container.identityManager.setBiometricUnlockEnabled(false) automaticamente e deixar a tela cair pro PIN normalmente, sem travar nem mostrar erro assustador — só um fallback silencioso. Adicione esse catch específico dentro de getBiometricDecryptCipher() no IdentityManager.
+
+## Não alterar
+
+- Nenhuma lógica de PIN, checkAppLockPin, deriveDatabaseKey, saveDatabaseKey/loadDatabaseKey — o PIN continua sendo o único caminho que toca a chave do banco de dados, isso não muda.
+- Nenhuma outra tela, nenhuma lógica de rede, criptografia de mensagens, ou backup social.
+- Não remova o fallback de PIN em nenhuma circunstância — ele precisa continuar funcionando sempre, com ou sem biometria configurada.
+
+Ao final, mostre o diff completo dos dois arquivos alterados."
+```
+
+Um lembrete de teste específico pra esse, já que você falou que quer testar sozinho mesmo: depois de ativar a biometria, tenta apagar e recadastrar sua digital no próprio Android (fora do app) — isso invalida a chave do Keystore de propósito, e é exatamente o cenário do item 4. O esperado é: o app percebe, desliga a biometria sozinho, e volta pro PIN sem drama. Se travar ou mostrar erro feio nessa situação, é o ponto pra me trazer de volta.
